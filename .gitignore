@@ -1,0 +1,32 @@
+# --- Python / FastAPI backend
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# Env files 
+.env
+.env.*
+!.env.example        # keep the template tracked
+!.env.sample
+!.env.ci
+
+# Editors/OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# Coverage & builds
+.coverage
+htmlcov/
+dist/
+build/
+pip-wheel-metadata/
+
+# Docker/compose cache
+*.log
+**/.pytest_cache/

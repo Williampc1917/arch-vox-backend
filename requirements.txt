@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx
+requests
+pydantic
+python-jose[cryptography]
+pyjwt
+redis==5.0.4
+psycopg[binary]
+pydantic-settings
