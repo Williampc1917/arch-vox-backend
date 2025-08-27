@@ -1,20 +1,29 @@
 from pathlib import Path
 from urllib.parse import urlparse
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env.local"
 
+
 class Settings(BaseSettings):
+    # Environment settings
+    environment: str = "development"
+    debug: bool = False
+
+    # Supabase settings
     SUPABASE_URL: str
     SUPABASE_JWKS_URL: str | None = None
     SUPABASE_SERVICE_ROLE_KEY: str
     SUPABASE_DB_URL: str
     SUPABASE_ANON_KEY: str | None = None
-    SUPABASE_JWT_SECRET: str | None = None  # <-- Add this
+    SUPABASE_JWT_SECRET: str | None = None
 
+    # Redis settings
     UPSTASH_REDIS_REST_URL: str
     UPSTASH_REDIS_REST_TOKEN: str
 
+    # VAPI settings
     VAPI_PRIVATE_KEY: str | None = None
 
     model_config = SettingsConfigDict(
@@ -40,5 +49,6 @@ class Settings(BaseSettings):
             return host.split(".")[0]
         except Exception:
             return None
+
 
 settings = Settings()

@@ -20,10 +20,12 @@ Usage:
        where <access_token> is from Supabase Auth sign-in.
 """
 
+
 import jwt
-from fastapi import HTTPException, Header
-from typing import Optional
+from fastapi import Header, HTTPException
+
 from app.config import settings
+
 
 def verify_supabase_jwt(token: str) -> dict:
     """Decode and verify a Supabase-issued JWT using the HS256 secret."""
@@ -40,7 +42,8 @@ def verify_supabase_jwt(token: str) -> dict:
     except jwt.PyJWTError as e:
         raise HTTPException(status_code=401, detail=f"invalid token: {e}")
 
-async def auth_dependency(authorization: Optional[str] = Header(None)) -> dict:
+
+async def auth_dependency(authorization: str | None = Header(None)) -> dict:
     """
     FastAPI dependency for protecting routes.
     Validates Authorization header as 'Bearer <token>'.

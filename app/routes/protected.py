@@ -18,9 +18,11 @@ Usage:
 """
 
 from fastapi import APIRouter, Depends
+
 from app.auth.verify import auth_dependency
 
 router = APIRouter()
+
 
 @router.get("/me")
 def me(claims: dict = Depends(auth_dependency)):

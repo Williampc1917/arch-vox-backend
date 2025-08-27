@@ -1,23 +1,27 @@
-from fastapi import APIRouter, HTTPException
-import time
-import json
 import base64
-import requests
-from app.services.redis_store import ping as redis_ping
-from app.db.postgres import check_db
-from app.config import settings
+import json
+import time
 
+import requests
+from fastapi import APIRouter
+
+from app.config import settings
+from app.db.postgres import check_db
+from app.services.redis_store import ping as redis_ping
 
 router = APIRouter()
+
 
 @router.get("/healthz")
 def healthz():
     """Simple liveness check: app booted."""
     return {"status": "ok"}
 
+
 def _b64url_decode(s: str) -> bytes:
     pad = (-len(s)) % 4
     return base64.urlsafe_b64decode(s + ("=" * pad))
+
 
 def _decode_jwt_unverified(token: str):
     """Decode header & payload without verifying signature."""
@@ -31,6 +35,7 @@ def _decode_jwt_unverified(token: str):
     except Exception:
         return None, None
 
+
 @router.get("/readyz")
 def readyz():
     """Readiness: verify Redis, Supabase Auth, Postgres, and Vapi API."""
@@ -41,10 +46,7 @@ def readyz():
     t0 = time.time()
     try:
         r_ok = redis_ping()
-        checks["redis"] = {
-            "ok": bool(r_ok),
-            "latency_ms": round((time.time() - t0) * 1000, 1)
-        }
+        checks["redis"] = {"ok": bool(r_ok), "latency_ms": round((time.time() - t0) * 1000, 1)}
         overall_ok = overall_ok and bool(r_ok)
     except Exception as e:
         checks["redis"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -77,10 +79,7 @@ def readyz():
     try:
         db_ok = check_db()
         if db_ok is True:
-            checks["postgres"] = {
-                "ok": True,
-                "latency_ms": round((time.time() - t0) * 1000, 1)
-            }
+            checks["postgres"] = {"ok": True, "latency_ms": round((time.time() - t0) * 1000, 1)}
         else:
             checks["postgres"] = {"ok": False, "error": db_ok}
             overall_ok = False
@@ -118,9 +117,5 @@ def readyz():
     except Exception as e:
         checks["vapi"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         overall_ok = False
-   
 
     return {"overall_ok": overall_ok, "checks": checks}
-
-
-

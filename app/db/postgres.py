@@ -1,5 +1,7 @@
 import psycopg
+
 from app.config import settings
+
 
 def check_db():
     """
