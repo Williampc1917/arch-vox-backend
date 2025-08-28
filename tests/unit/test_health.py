@@ -30,11 +30,22 @@ def test_readyz_endpoint_all_services_healthy():
         patch("app.routes.health.requests.get") as mock_get,
     ):
 
-        # Mock Vapi API response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+        # Mock responses for both Supabase JWKS and Vapi API
+        def mock_get_side_effect(url, **kwargs):
+            mock_response = MagicMock()
+            mock_response.ok = True
+            mock_response.status_code = 200
+
+            if "jwks.json" in url:
+                # Mock Supabase JWKS response
+                mock_response.json.return_value = {"keys": [{"kid": "test-key"}]}
+            else:
+                # Mock Vapi API response
+                mock_response.json.return_value = {"assistants": []}
+
+            return mock_response
+
+        mock_get.side_effect = mock_get_side_effect
 
         response = client.get("/readyz")
 
@@ -101,13 +112,13 @@ def test_readyz_endpoint_postgres_unhealthy():
         assert data["checks"]["postgres"]["error"] == "Connection failed"
 
 
-def test_readyz_endpoint_missing_jwt_secret():
-    """Test readiness endpoint when JWT secret is missing."""
+def test_readyz_endpoint_missing_vapi_key():
+    """Test readiness endpoint when VAPI private key is missing."""
     with (
         patch("app.routes.health.redis_ping", return_value=True),
         patch("app.routes.health.check_db", return_value=True),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", None),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", "test-key"),
+        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
+        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", None),
         patch("app.routes.health.requests.get") as mock_get,
     ):
 
@@ -122,8 +133,8 @@ def test_readyz_endpoint_missing_jwt_secret():
         assert response.status_code == 200
         data = response.json()
         assert data["overall_ok"] is False
-        assert data["checks"]["supabase_auth"]["ok"] is False
-        assert "SUPABASE_JWT_SECRET not set" in data["checks"]["supabase_auth"]["error"]
+        assert data["checks"]["vapi"]["ok"] is False
+        assert "VAPI_PRIVATE_KEY not set" in data["checks"]["vapi"]["error"]
 
 
 def test_readyz_includes_latency_metrics():
@@ -152,6 +163,6 @@ def test_readyz_includes_latency_metrics():
         assert "latency_ms" in checks["redis"]
         assert "latency_ms" in checks["postgres"]
         assert "latency_ms" in checks["vapi"]
-        assert isinstance(checks["redis"]["latency_ms"], (int, float))
-        assert isinstance(checks["postgres"]["latency_ms"], (int, float))
-        assert isinstance(checks["vapi"]["latency_ms"], (int, float))
+        assert isinstance(checks["redis"]["latency_ms"], int | float)
+        assert isinstance(checks["postgres"]["latency_ms"], int | float)
+        assert isinstance(checks["vapi"]["latency_ms"], int | float)

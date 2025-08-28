@@ -4,7 +4,7 @@ Tests for external service connections.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
+import requests
 
 from app.db.postgres import check_db
 from app.services.redis_store import get, ping, set_with_ttl
@@ -101,11 +101,11 @@ class TestRedisConnection:
     @patch("requests.post")
     def test_ping_exception(self, mock_post):
         """Test Redis ping with network exception."""
-        mock_post.side_effect = Exception("Network error")
+        mock_post.side_effect = requests.exceptions.RequestException("Network error")
 
-        # ping() should handle exceptions gracefully
-        with pytest.raises(Exception):
-            ping()
+        # ping() should handle exceptions gracefully and return False
+        result = ping()
+        assert result is False
 
     @patch("requests.post")
     def test_set_with_ttl_success(self, mock_post):

@@ -26,7 +26,7 @@ async def voice_webhook(request: Request):
     # (Optional) inspect payload during setup
     try:
         payload = await request.json()
-    except:
+    except Exception:
         payload = {}
 
     say = (

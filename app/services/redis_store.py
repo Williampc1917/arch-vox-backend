@@ -10,8 +10,11 @@ def _hdr():
 
 
 def ping() -> bool:
-    r = requests.post(f"{settings.UPSTASH_REDIS_REST_URL}/ping", headers=_hdr(), timeout=3)
-    return r.ok and "PONG" in r.text.upper()
+    try:
+        r = requests.post(f"{settings.UPSTASH_REDIS_REST_URL}/ping", headers=_hdr(), timeout=3)
+        return r.ok and "PONG" in r.text.upper()
+    except requests.exceptions.RequestException:
+        return False
 
 
 def set_with_ttl(key: str, value: str, ttl_s: int | None = None) -> bool:
