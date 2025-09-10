@@ -8,6 +8,7 @@ Purpose:
 
 Notes:
     - Protected routes under `app.routes.protected` require a valid Supabase JWT.
+    - Onboarding routes under `app.routes.onboarding` require a valid Supabase JWT.
     - Health routes (`/healthz`, `/readyz`) are public and used for liveness/readiness checks.
     - All requests are logged in JSON format for observability.
 """
@@ -19,7 +20,7 @@ from fastapi import FastAPI, Request
 
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger, setup_logging
-from app.routes import health, protected
+from app.routes import health, onboarding, protected
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -50,6 +51,7 @@ app.include_router(health.router)
 
 # Protected routes (require valid Supabase JWT)
 app.include_router(protected.router)
+app.include_router(onboarding.router)  # Added onboarding endpoints
 
 
 @app.middleware("http")

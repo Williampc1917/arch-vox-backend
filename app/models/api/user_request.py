@@ -5,4 +5,3 @@ class OnboardingProfileUpdateRequest(BaseModel):
     """Request body for updating onboarding profile step."""
 
     display_name: str = Field(..., min_length=1, max_length=100)
-    timezone: str = Field(..., description="e.g., 'America/New_York'")
