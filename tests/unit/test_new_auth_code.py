@@ -14,9 +14,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.api.user_response import AuthMeta, UserProfileResponse
+
 # Test the models
 from app.models.domain.user_domain import Plan, UserProfile
-from app.models.api.user_response import UserProfileResponse, AuthMeta
 
 # Test the service
 from app.services.user_service import get_user_profile
@@ -127,11 +128,8 @@ async def test_user_service_not_found(mock_connect):
 def test_import_everything():
     """Test that we can import all our new code without errors."""
     # Test models import
-    from app.models.domain.user_domain import Plan, UserProfile
-    from app.models.api.user_response import UserProfileResponse, AuthMeta
 
     # Test service import
-    from app.services.user_service import get_user_profile
 
     # Test that the updated protected route imports
     # (This would need to be updated if the route file exists)
