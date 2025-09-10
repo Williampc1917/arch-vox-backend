@@ -70,7 +70,7 @@ async def update_profile_name(
     SET
         display_name = %s,
         timezone = %s,
-        onboarding_step = 'profile',
+        onboarding_step = 'gmail',
         updated_at = NOW()
     WHERE
         id = %s
