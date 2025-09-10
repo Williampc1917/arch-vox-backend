@@ -7,25 +7,21 @@ import psycopg
 
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger
-from app.models.user import Plan, UserProfile
+from app.models.domain.user_domain import Plan, UserProfile
 
 logger = get_logger(__name__)
 
 
 async def get_user_profile(user_id: str) -> UserProfile | None:
     """
-    Fetch complete user profile from database.
-
-    Args:
-        user_id: UUID string of the user
-
-    Returns:
-        UserProfile if found, None if not found or error
+    Fetch complete user profile (user + settings + plan) from database.
     """
     query = """
     SELECT
-        u.id, u.email, u.display_name, u.is_active, u.created_at, u.updated_at,
-        us.voice_preferences, us.updated_at as settings_updated_at,
+        u.id, u.email, u.display_name, u.is_active,
+        u.timezone, u.onboarding_completed, u.gmail_connected, u.onboarding_step,
+        u.created_at, u.updated_at,
+        us.voice_preferences,
         p.name as plan_name, p.max_daily_requests
     FROM users u
     LEFT JOIN user_settings us ON u.id = us.user_id
@@ -35,7 +31,6 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
     """
 
     try:
-        # Use autocommit for read-only operations
         with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, (user_id,))
@@ -45,29 +40,38 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
                     logger.info("User not found or inactive", user_id=user_id)
                     return None
 
-                # Unpack row data
+                # UPDATE unpacking to include new fields:
                 (
                     id_val,
                     email,
                     display_name,
                     is_active,
+                    timezone,  # NEW
+                    onboarding_completed,  # NEW
+                    gmail_connected,  # NEW
+                    onboarding_step,  # NEW
                     created_at,
                     updated_at,
                     voice_preferences,
-                    settings_updated_at,
                     plan_name,
                     max_daily_requests,
                 ) = row
 
-                # Create plan object
-                plan = Plan(name=plan_name or "free", max_daily_requests=max_daily_requests or 100)
+                # Build domain objects
+                plan = Plan(
+                    name=plan_name or "free",
+                    max_daily_requests=max_daily_requests or 100,
+                )
 
-                # Create user profile
                 profile = UserProfile(
                     user_id=str(id_val),
                     email=email,
                     display_name=display_name,
                     is_active=is_active,
+                    timezone=timezone,  # NEW
+                    onboarding_completed=onboarding_completed,  # NEW
+                    gmail_connected=gmail_connected,  # NEW
+                    onboarding_step=onboarding_step,  # NEW
                     voice_preferences=voice_preferences
                     or {"tone": "professional", "speed": "normal"},
                     plan=plan,
@@ -75,12 +79,12 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
                     updated_at=updated_at,
                 )
 
-                logger.info("User profile retrieved successfully", user_id=user_id, plan=plan_name)
+                logger.info("User profile retrieved", user_id=user_id, plan=plan.name)
                 return profile
 
     except psycopg.Error as e:
-        logger.error("Database error retrieving user profile", user_id=user_id, error=str(e))
+        logger.error("Database error", user_id=user_id, error=str(e))
         return None
     except Exception as e:
-        logger.error("Unexpected error retrieving user profile", user_id=user_id, error=str(e))
+        logger.error("Unexpected error", user_id=user_id, error=str(e))
         return None
