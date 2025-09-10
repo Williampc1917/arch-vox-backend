@@ -1,6 +1,7 @@
 """
 Simple test for the 3 new files we created:
-- app/models/user.py
+- app/models/domain/user_domain.py
+- app/models/api/user_response.py
 - app/services/user_service.py
 - app/routes/protected.py (updated)
 
@@ -14,7 +15,8 @@ from uuid import uuid4
 import pytest
 
 # Test the models
-from app.models.user import Plan, UserProfile, UserProfileResponse
+from app.models.domain.user_domain import Plan, UserProfile
+from app.models.api.user_response import UserProfileResponse, AuthMeta
 
 # Test the service
 from app.services.user_service import get_user_profile
@@ -34,6 +36,10 @@ def test_user_models_work():
         email="test@example.com",
         display_name="Test User",
         is_active=True,
+        timezone="UTC",
+        onboarding_completed=False,
+        gmail_connected=False,
+        onboarding_step="start",
         voice_preferences={"tone": "professional"},
         plan=plan,
         created_at=datetime.now(),
@@ -45,11 +51,11 @@ def test_user_models_work():
     assert profile.plan.name == "free"
 
     # Create API response
-    auth_data = {"user_id": user_id, "role": "authenticated"}
-    response = UserProfileResponse(profile=profile, auth=auth_data)
+    auth_meta = AuthMeta(user_id=user_id, role="authenticated")
+    response = UserProfileResponse(profile=profile, auth=auth_meta)
 
     assert response.profile.email == "test@example.com"
-    assert response.auth["role"] == "authenticated"
+    assert response.auth.role == "authenticated"
 
     print("✅ User models work correctly")
 
@@ -60,16 +66,19 @@ async def test_user_service_success(mock_connect):
     """Test that our user service function works with mocked database."""
     user_id = str(uuid4())
 
-    # Mock database response
+    # Mock database response - updated to include new fields
     mock_row = (
         user_id,  # id
         "test@example.com",  # email
         "Test User",  # display_name
         True,  # is_active
+        "UTC",  # timezone
+        False,  # onboarding_completed
+        False,  # gmail_connected
+        "start",  # onboarding_step
         datetime.now(),  # created_at
         datetime.now(),  # updated_at
         {"tone": "professional"},  # voice_preferences
-        datetime.now(),  # settings_updated_at
         "free",  # plan_name
         100,  # max_daily_requests
     )
@@ -118,10 +127,14 @@ async def test_user_service_not_found(mock_connect):
 def test_import_everything():
     """Test that we can import all our new code without errors."""
     # Test models import
+    from app.models.domain.user_domain import Plan, UserProfile
+    from app.models.api.user_response import UserProfileResponse, AuthMeta
 
     # Test service import
+    from app.services.user_service import get_user_profile
 
     # Test that the updated protected route imports
+    # (This would need to be updated if the route file exists)
 
     print("✅ All imports work correctly")
 
