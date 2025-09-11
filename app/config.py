@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # VAPI settings
     VAPI_PRIVATE_KEY: str | None = None
 
+    # Gmail OAuth settings
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    GOOGLE_REDIRECT_URI: str | None = None
+
+    ENCRYPTION_KEY: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_PATH),
         env_file_encoding="utf-8",
@@ -49,6 +56,13 @@ class Settings(BaseSettings):
             return host.split(".")[0]
         except Exception:
             return None
+
+    def gmail_redirect_uri(self) -> str:
+        """Get Gmail OAuth redirect URI with fallback."""
+        if self.GOOGLE_REDIRECT_URI:
+            return self.GOOGLE_REDIRECT_URI
+        # Default for local development
+        return "http://localhost:8000/gmail/callback"
 
 
 settings = Settings()

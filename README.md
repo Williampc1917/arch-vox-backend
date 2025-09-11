@@ -158,13 +158,3 @@ curl -s http://127.0.0.1:8000/healthz
   }
 }
 ```
-
----
-
-##  Next Steps / Roadmap
-
-1. Gmail OAuth clients.
-2. Inbox triage endpoint.
-3. Thread summarization.
-4. Compose/refine/send endpoints.
-5. iOS voice flow integration with Vapi.

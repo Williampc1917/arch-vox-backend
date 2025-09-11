@@ -23,6 +23,12 @@ dependencies = [
     "requests>=2.31.0",
     "pyjwt>=2.8.0",
     "python-jose[cryptography]>=3.3.0",
+    "cryptography>=41.0.0",  # Add this line
+    
+    # Google APIs
+    "google-auth>=2.23.0",
+    "google-auth-oauthlib>=1.1.0",
+    "google-api-python-client>=2.100.0",
     
     # Logging & Observability
     "structlog>=23.2.0",
