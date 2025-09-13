@@ -62,7 +62,7 @@ class Settings(BaseSettings):
         if self.GOOGLE_REDIRECT_URI:
             return self.GOOGLE_REDIRECT_URI
         # Default for local development
-        return "http://localhost:8000/gmail/callback"
+        return "http://localhost:8000/auth/gmail/callback"
 
 
 settings = Settings()

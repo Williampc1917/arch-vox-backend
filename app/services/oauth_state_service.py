@@ -211,7 +211,16 @@ class OAuthStateService:
             response = requests.post(url, headers=self._redis_headers(), timeout=5)
 
             if response.ok:
-                result = response.json()
+                redis_response = response.json()
+                
+                # FIXED: Handle Upstash Redis response format
+                # Upstash returns: {"result": "user_id"}
+                # We need: "user_id"
+                if isinstance(redis_response, dict) and "result" in redis_response:
+                    result = redis_response["result"]
+                else:
+                    result = redis_response
+                    
                 logger.debug("State retrieved from Redis", redis_key=redis_key[:20] + "...")
                 return result
             else:

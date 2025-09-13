@@ -186,6 +186,8 @@ async def _enhance_profile_with_gmail_health(
         return profile
 
 
+    # Replace the _assess_gmail_connection_health function in app/services/user_service.py
+
 async def _assess_gmail_connection_health(
     gmail_connected: bool,
     token_expires_at: datetime | None,
@@ -222,7 +224,19 @@ async def _assess_gmail_connection_health(
                 "needs_attention": True,
             }
 
-        now = datetime.utcnow()
+        # FIXED: Ensure both datetimes have timezone info for comparison
+        from datetime import timezone
+        
+        # Convert current time to UTC with timezone info
+        now = datetime.now(timezone.utc)
+        
+        # Ensure token_expires_at has timezone info
+        if token_expires_at.tzinfo is None:
+            # Assume UTC if no timezone info
+            token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+        elif token_expires_at.tzinfo != timezone.utc:
+            # Convert to UTC if different timezone
+            token_expires_at = token_expires_at.astimezone(timezone.utc)
 
         # Check for excessive refresh failures
         if refresh_failure_count and refresh_failure_count >= 3:

@@ -153,6 +153,23 @@ class GoogleOAuthService:
 
             oauth_url = f"{GOOGLE_OAUTH_BASE_URL}?{urlencode(params)}"
 
+            # ============================================================================
+            # 🚨 TEMPORARY DEBUG LOGGING - DELETE THIS ENTIRE BLOCK AFTER TESTING! 🚨
+            # ============================================================================
+            # TODO: REMOVE THIS DEBUG LOG BEFORE PRODUCTION DEPLOYMENT
+            # This logs sensitive OAuth URLs that should not be in production logs
+            logger.warning(
+                "🔧 TEMP DEBUG: OAuth URL Generated (DELETE THIS LOG!)",
+                oauth_url=oauth_url,
+                redirect_uri=self.redirect_uri,
+                client_id_preview=self.client_id[:12] + "...",
+            )
+            print(f"🔧 DEBUG OAuth URL: {oauth_url}")  # Also print to console
+            print(f"🔧 DEBUG Redirect URI: {self.redirect_uri}")
+            # ============================================================================
+            # 🚨 END OF TEMPORARY DEBUG BLOCK - DELETE EVERYTHING ABOVE THIS LINE 🚨
+            # ============================================================================
+
             logger.info(
                 "OAuth URL generated successfully",
                 state_preview=state[:8] + "...",
@@ -166,10 +183,10 @@ class GoogleOAuthService:
             logger.error(
                 "Failed to generate OAuth URL",
                 state_preview=state[:8] + "...",
-                error=str(e),
-                error_type=type(e).__name__,
-            )
-            raise GoogleOAuthError(f"OAuth URL generation failed: {e}") from e
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        raise GoogleOAuthError(f"OAuth URL generation failed: {e}") from e
 
     def exchange_code_for_tokens(self, authorization_code: str) -> TokenResponse:
         """

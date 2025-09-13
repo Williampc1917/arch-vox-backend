@@ -541,7 +541,9 @@ class TokenService:
             list[str]: List of user IDs with tokens needing refresh
         """
         try:
-            buffer_time = datetime.utcnow() + timedelta(minutes=buffer_minutes)
+            # FIXED: Use timezone-aware datetime
+            from datetime import timezone
+            buffer_time = datetime.now(timezone.utc) + timedelta(minutes=buffer_minutes)
 
             query = """
             SELECT user_id
