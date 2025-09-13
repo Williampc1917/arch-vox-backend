@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class Plan(BaseModel):
@@ -13,6 +13,8 @@ class Plan(BaseModel):
 
 class UserProfile(BaseModel):
     """Merged user profile (users + settings + plan)."""
+
+    model_config = ConfigDict(extra="allow")
 
     user_id: str
     email: str
@@ -29,3 +31,11 @@ class UserProfile(BaseModel):
     plan: Plan
     created_at: datetime
     updated_at: datetime
+
+    # Gmail health fields (optional, populated by user service)
+    gmail_connection_health: str | None = None
+    gmail_health_details: dict[str, Any] | None = None
+    gmail_needs_attention: bool = False
+    gmail_token_expires_at: datetime | None = None
+    gmail_last_refresh_attempt: datetime | None = None
+    gmail_needs_refresh: bool = False

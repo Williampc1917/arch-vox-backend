@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request
 
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger, setup_logging
-from app.routes import health, onboarding, protected
+from app.routes import gmail_auth, health, onboarding, protected
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -52,6 +52,7 @@ app.include_router(health.router)
 # Protected routes (require valid Supabase JWT)
 app.include_router(protected.router)
 app.include_router(onboarding.router)  # Added onboarding endpoints
+app.include_router(gmail_auth.router)
 
 
 @app.middleware("http")

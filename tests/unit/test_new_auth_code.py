@@ -8,7 +8,7 @@ Simple test for the 3 new files we created:
 Run with: pytest tests/test_new_auth_code.py -v
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -82,6 +82,11 @@ async def test_user_service_success(mock_connect):
         {"tone": "professional"},  # voice_preferences
         "free",  # plan_name
         100,  # max_daily_requests
+        # Gmail token fields (4 missing fields)
+        datetime.now() + timedelta(hours=1),  # token_expires_at
+        0,  # refresh_failure_count
+        None,  # last_refresh_attempt
+        datetime.now(),  # token_updated_at
     )
 
     # Setup mock

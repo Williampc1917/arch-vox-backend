@@ -1,5 +1,5 @@
 # models/domain/oauth_domain.py
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel
@@ -20,11 +20,11 @@ class OAuthToken(BaseModel):
         """Check if access token is expired."""
         if not self.expires_at:
             return False
-        return datetime.utcnow() >= self.expires_at
+        return datetime.now(UTC) >= self.expires_at
 
     def needs_refresh(self, buffer_minutes: int = 5) -> bool:
         """Check if token should be refreshed soon."""
         if not self.expires_at:
             return False
-        buffer_time = datetime.utcnow() + timedelta(minutes=buffer_minutes)
+        buffer_time = datetime.now(UTC) + timedelta(minutes=buffer_minutes)
         return buffer_time >= self.expires_at
