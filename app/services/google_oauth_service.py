@@ -183,10 +183,10 @@ class GoogleOAuthService:
             logger.error(
                 "Failed to generate OAuth URL",
                 state_preview=state[:8] + "...",
-            error=str(e),
-            error_type=type(e).__name__,
-        )
-        raise GoogleOAuthError(f"OAuth URL generation failed: {e}") from e
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise GoogleOAuthError(f"OAuth URL generation failed: {e}") from e
 
     def exchange_code_for_tokens(self, authorization_code: str) -> TokenResponse:
         """

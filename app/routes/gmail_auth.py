@@ -136,9 +136,7 @@ async def oauth_callback(
         )
 
         # Complete OAuth flow
-        success = complete_gmail_oauth(
-            user_id=user_id, code=request.code, state=request.state
-        )
+        success = complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
 
         if success:
             response = GmailAuthCallbackResponse(
@@ -500,12 +498,15 @@ async def get_connection_metrics(claims: dict = Depends(auth_dependency)):
         ) from None
 
     # Add this NEW endpoint ABOVE your existing POST /callback endpoint
+
+
 # FIXED GET callback endpoint - replace in app/routes/gmail_auth.py
 
 # TEMPORARY DEBUG VERSION of the GET callback endpoint
 # Replace this in app/routes/gmail_auth.py to debug Redis issue
 
 # Production version - replace the debug GET callback in app/routes/gmail_auth.py
+
 
 @router.get("/callback")
 async def oauth_callback_redirect(
@@ -514,11 +515,14 @@ async def oauth_callback_redirect(
     error: str = Query(None, description="OAuth error if any"),
 ):
     """Handle OAuth callback redirect from Google (GET request)."""
-    
+
     if error:
-        logger.warning("OAuth callback received error", error=error, state_preview=state[:8] + "...")
-        
-        return HTMLResponse(content=f"""
+        logger.warning(
+            "OAuth callback received error", error=error, state_preview=state[:8] + "..."
+        )
+
+        return HTMLResponse(
+            content=f"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -536,7 +540,9 @@ async def oauth_callback_redirect(
             </div>
         </body>
         </html>
-        """, status_code=400)
+        """,
+            status_code=400,
+        )
 
     try:
         logger.info(
@@ -544,90 +550,91 @@ async def oauth_callback_redirect(
             code_preview=code[:12] + "...",
             state_preview=state[:8] + "...",
         )
-        
+
         # Store OAuth data in Redis
-        from app.services.redis_store import set_with_ttl
         import json
         from datetime import datetime
-        
+
+        from app.services.redis_store import set_with_ttl
+
         oauth_data = {
             "code": code,
             "state": state,
             "timestamp": datetime.utcnow().isoformat(),
-            "expires_at": (datetime.utcnow().timestamp() + 300)
+            "expires_at": (datetime.utcnow().timestamp() + 300),
         }
-        
+
         oauth_data_json = json.dumps(oauth_data)
         redis_key = f"oauth_callback_data:{state}"
-        
+
         success = set_with_ttl(redis_key, oauth_data_json, 300)
-        
+
         if not success:
             logger.error("Failed to store OAuth data in Redis", state_preview=state[:8] + "...")
             raise Exception("Failed to store OAuth data")
-        
+
         logger.info(
             "OAuth callback data stored successfully",
             state_preview=state[:8] + "...",
-            redis_key_preview=redis_key[:30] + "..."
+            redis_key_preview=redis_key[:30] + "...",
         )
-        
-        return HTMLResponse(content=f"""
+
+        return HTMLResponse(
+            content="""
         <!DOCTYPE html>
         <html>
         <head>
             <title>Gmail Connected Successfully!</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
-                body {{ 
+                body {
                     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                     margin: 0; padding: 40px; background: #f5f5f7; text-align: center;
-                }}
-                .container {{ 
-                    max-width: 400px; margin: 0 auto; background: white; 
+                }
+                .container {
+                    max-width: 400px; margin: 0 auto; background: white;
                     padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                }}
-                .success {{ color: #34c759; margin: 20px 0; }}
-                .button {{ 
-                    background: #007AFF; color: white; padding: 12px 24px; 
+                }
+                .success { color: #34c759; margin: 20px 0; }
+                .button {
+                    background: #007AFF; color: white; padding: 12px 24px;
                     border-radius: 8px; border: none; cursor: pointer;
-                }}
-                .highlight {{ background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+                }
+                .highlight { background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; }
             </style>
         </head>
         <body>
             <div class="container">
                 <h2 class="success">✅ Gmail Connected Successfully!</h2>
-                
                 <div class="highlight">
                     <p><strong>Please return to your mobile app to continue.</strong></p>
                     <p>Your Gmail connection is being processed...</p>
                 </div>
-                
+
                 <button class="button" onclick="window.close()">Close Window</button>
-                
+
                 <div style="margin-top: 30px; font-size: 14px; color: #8e8e93;">
                     <p>This window will close automatically in <span id="countdown">10</span> seconds.</p>
                 </div>
             </div>
-            
             <script>
                 let countdown = 10;
                 const countdownEl = document.getElementById('countdown');
-                
-                const timer = setInterval(() => {{
+
+                const timer = setInterval(() => {
                     countdown--;
                     countdownEl.textContent = countdown;
-                    
-                    if (countdown <= 0) {{
+
+                    if (countdown <= 0) {
                         clearInterval(timer);
                         window.close();
-                    }}
-                }}, 1000);
+                    }
+                }, 1000);
             </script>
         </body>
         </html>
-        """)
+        """
+        )
 
     except Exception as e:
         logger.error(
@@ -637,8 +644,9 @@ async def oauth_callback_redirect(
             error=str(e),
             error_type=type(e).__name__,
         )
-        
-        return HTMLResponse(content=f"""
+
+        return HTMLResponse(
+            content="""
         <!DOCTYPE html>
         <html>
         <head><title>Connection Error</title></head>
@@ -651,31 +659,30 @@ async def oauth_callback_redirect(
             </button>
         </body>
         </html>
-        """, status_code=500)
+        """,
+            status_code=500,
+        )
 
 
 # FIXED retrieve endpoint
 @router.get("/callback/retrieve/{state}")
-async def retrieve_oauth_data(
-    state: str,
-    claims: dict = Depends(auth_dependency)
-):
+async def retrieve_oauth_data(state: str, claims: dict = Depends(auth_dependency)):
     """Retrieve OAuth callback data by state parameter."""
-    
+
     user_id = claims.get("sub")
     if not user_id:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Invalid token: missing user ID"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
         )
-    
+
     try:
-        from app.services.redis_store import get
         import json
-        
+
+        from app.services.redis_store import get
+
         redis_key = f"oauth_callback_data:{state}"
         redis_response = get(redis_key)
-        
+
         if not redis_response:
             logger.warning(
                 "OAuth callback data not found",
@@ -684,23 +691,23 @@ async def retrieve_oauth_data(
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="OAuth callback data not found or expired. Please try connecting Gmail again."
+                detail="OAuth callback data not found or expired. Please try connecting Gmail again.",
             )
-        
+
         # FIXED: Handle Upstash Redis response format
-        # Upstash returns: {"result": "your_json_string"} 
+        # Upstash returns: {"result": "your_json_string"}
         # We need: "your_json_string"
         if isinstance(redis_response, dict) and "result" in redis_response:
             oauth_data_json = redis_response["result"]
         else:
             oauth_data_json = redis_response
-        
+
         # Parse the JSON string into a Python dict
         if isinstance(oauth_data_json, str):
             oauth_data = json.loads(oauth_data_json)
         else:
             oauth_data = oauth_data_json
-        
+
         # Verify we have the required fields
         if not isinstance(oauth_data, dict) or "code" not in oauth_data:
             logger.error(
@@ -708,28 +715,28 @@ async def retrieve_oauth_data(
                 user_id=user_id,
                 state_preview=state[:8] + "...",
                 has_code=oauth_data.get("code") if isinstance(oauth_data, dict) else False,
-                data_type=type(oauth_data).__name__
+                data_type=type(oauth_data).__name__,
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invalid OAuth data format. Please try connecting Gmail again."
+                detail="Invalid OAuth data format. Please try connecting Gmail again.",
             )
-        
+
         logger.info(
             "OAuth callback data retrieved successfully",
             user_id=user_id,
             state_preview=state[:8] + "...",
-            has_code=bool(oauth_data.get("code"))
+            has_code=bool(oauth_data.get("code")),
         )
-        
+
         return {
             "success": True,
             "code": oauth_data["code"],
             "state": oauth_data["state"],
             "timestamp": oauth_data["timestamp"],
-            "message": "OAuth data retrieved successfully."
+            "message": "OAuth data retrieved successfully.",
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -738,9 +745,9 @@ async def retrieve_oauth_data(
             user_id=user_id,
             state_preview=state[:8] + "...",
             error=str(e),
-            error_type=type(e).__name__
+            error_type=type(e).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve OAuth callback data."
-        )
+            detail="Failed to retrieve OAuth callback data.",
+        ) from None

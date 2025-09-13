@@ -3,7 +3,7 @@ Token Service for OAuth token lifecycle management.
 Handles encryption, storage, expiration, refresh, and cleanup of OAuth tokens.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 
@@ -542,8 +542,8 @@ class TokenService:
         """
         try:
             # FIXED: Use timezone-aware datetime
-            from datetime import timezone
-            buffer_time = datetime.now(timezone.utc) + timedelta(minutes=buffer_minutes)
+
+            buffer_time = datetime.now(UTC) + timedelta(minutes=buffer_minutes)
 
             query = """
             SELECT user_id

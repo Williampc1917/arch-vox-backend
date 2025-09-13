@@ -3,7 +3,7 @@ User service for database operations.
 Handles fetching user profile data from the database with Gmail connection health.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import psycopg
 
@@ -166,17 +166,17 @@ async def _enhance_profile_with_gmail_health(
         profile.gmail_needs_refresh = False
         if token_expires_at and profile.gmail_connected:
             # FIXED: Ensure both datetimes have timezone info for comparison
-            from datetime import timezone
-            now = datetime.now(timezone.utc)
-            
+
+            now = datetime.now(UTC)
+
             # Ensure token_expires_at has timezone info
             if token_expires_at.tzinfo is None:
                 # Assume UTC if no timezone info
-                token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
-            elif token_expires_at.tzinfo != timezone.utc:
+                token_expires_at = token_expires_at.replace(tzinfo=UTC)
+            elif token_expires_at.tzinfo != UTC:
                 # Convert to UTC if different timezone
-                token_expires_at = token_expires_at.astimezone(timezone.utc)
-            
+                token_expires_at = token_expires_at.astimezone(UTC)
+
             time_until_expiry = token_expires_at - now
             profile.gmail_needs_refresh = time_until_expiry.total_seconds() < 3600  # 1 hour
 
@@ -197,8 +197,8 @@ async def _enhance_profile_with_gmail_health(
 
         return profile
 
-
     # Replace the _assess_gmail_connection_health function in app/services/user_service.py
+
 
 async def _assess_gmail_connection_health(
     gmail_connected: bool,
@@ -237,18 +237,17 @@ async def _assess_gmail_connection_health(
             }
 
         # FIXED: Ensure both datetimes have timezone info for comparison
-        from datetime import timezone
-        
+
         # Convert current time to UTC with timezone info
-        now = datetime.now(timezone.utc)
-        
+        now = datetime.now(UTC)
+
         # Ensure token_expires_at has timezone info
         if token_expires_at.tzinfo is None:
             # Assume UTC if no timezone info
-            token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
-        elif token_expires_at.tzinfo != timezone.utc:
+            token_expires_at = token_expires_at.replace(tzinfo=UTC)
+        elif token_expires_at.tzinfo != UTC:
             # Convert to UTC if different timezone
-            token_expires_at = token_expires_at.astimezone(timezone.utc)
+            token_expires_at = token_expires_at.astimezone(UTC)
 
         # Check for excessive refresh failures
         if refresh_failure_count and refresh_failure_count >= 3:

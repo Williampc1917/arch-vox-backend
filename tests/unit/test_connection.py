@@ -61,7 +61,7 @@ class TestRedisConnection:
         """Test successful Redis ping."""
         mock_response = MagicMock()
         mock_response.ok = True
-        mock_response.text = "PONG"
+        mock_response.json.return_value = {"result": "PONG"}
         mock_post.return_value = mock_response
 
         result = ping()
@@ -112,6 +112,7 @@ class TestRedisConnection:
         """Test Redis SET with TTL."""
         mock_response = MagicMock()
         mock_response.ok = True
+        mock_response.json.return_value = {"result": "OK"}
         mock_post.return_value = mock_response
 
         result = set_with_ttl("test_key", "test_value", 60)
@@ -129,6 +130,7 @@ class TestRedisConnection:
         """Test Redis SET without TTL."""
         mock_response = MagicMock()
         mock_response.ok = True
+        mock_response.json.return_value = {"result": "OK"}
         mock_post.return_value = mock_response
 
         result = set_with_ttl("test_key", "test_value")
