@@ -165,7 +165,19 @@ async def _enhance_profile_with_gmail_health(
         # Calculate if tokens need refresh soon (within 1 hour)
         profile.gmail_needs_refresh = False
         if token_expires_at and profile.gmail_connected:
-            time_until_expiry = token_expires_at - datetime.utcnow()
+            # FIXED: Ensure both datetimes have timezone info for comparison
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            
+            # Ensure token_expires_at has timezone info
+            if token_expires_at.tzinfo is None:
+                # Assume UTC if no timezone info
+                token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+            elif token_expires_at.tzinfo != timezone.utc:
+                # Convert to UTC if different timezone
+                token_expires_at = token_expires_at.astimezone(timezone.utc)
+            
+            time_until_expiry = token_expires_at - now
             profile.gmail_needs_refresh = time_until_expiry.total_seconds() < 3600  # 1 hour
 
         return profile

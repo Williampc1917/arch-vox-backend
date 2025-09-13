@@ -447,13 +447,18 @@ class GmailConnectionService:
         try:
             # Update gmail_connected and potentially onboarding_step
             if connected:
-                # When connecting, advance to gmail step if currently on profile step
+                # When connecting, advance onboarding step appropriately
                 query = """
                 UPDATE users
                 SET gmail_connected = %s,
                     onboarding_step = CASE
                         WHEN onboarding_step = 'profile' THEN 'gmail'
+                        WHEN onboarding_step = 'gmail' THEN 'completed'
                         ELSE onboarding_step
+                    END,
+                    onboarding_completed = CASE
+                        WHEN onboarding_step = 'gmail' THEN true
+                        ELSE onboarding_completed
                     END,
                     updated_at = NOW()
                 WHERE id = %s AND is_active = true
