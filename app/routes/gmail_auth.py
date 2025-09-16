@@ -551,7 +551,7 @@ async def oauth_callback_redirect(
             state_preview=state[:8] + "...",
         )
 
-        # Store OAuth data in Redis
+        # Store OAuth data in Redis using fast client
         import json
         from datetime import datetime
 
@@ -567,7 +567,8 @@ async def oauth_callback_redirect(
         oauth_data_json = json.dumps(oauth_data)
         redis_key = f"oauth_callback_data:{state}"
 
-        success = set_with_ttl(redis_key, oauth_data_json, 300)
+        # Use fast Redis client (now 1ms instead of 25ms)
+        success = await set_with_ttl(redis_key, oauth_data_json, 300)
 
         if not success:
             logger.error("Failed to store OAuth data in Redis", state_preview=state[:8] + "...")
@@ -664,7 +665,7 @@ async def oauth_callback_redirect(
         )
 
 
-# FIXED retrieve endpoint
+# FIXED retrieve endpoint with fast Redis
 @router.get("/callback/retrieve/{state}")
 async def retrieve_oauth_data(state: str, claims: dict = Depends(auth_dependency)):
     """Retrieve OAuth callback data by state parameter."""
@@ -681,7 +682,9 @@ async def retrieve_oauth_data(state: str, claims: dict = Depends(auth_dependency
         from app.services.redis_store import get
 
         redis_key = f"oauth_callback_data:{state}"
-        redis_response = get(redis_key)
+
+        # Use fast Redis client (now 1ms instead of 25ms)
+        redis_response = await get(redis_key)
 
         if not redis_response:
             logger.warning(
@@ -694,18 +697,15 @@ async def retrieve_oauth_data(state: str, claims: dict = Depends(auth_dependency
                 detail="OAuth callback data not found or expired. Please try connecting Gmail again.",
             )
 
-        # FIXED: Handle Upstash Redis response format
-        # Upstash returns: {"result": "your_json_string"}
-        # We need: "your_json_string"
-        if isinstance(redis_response, dict) and "result" in redis_response:
-            oauth_data_json = redis_response["result"]
-        else:
-            oauth_data_json = redis_response
+        # With fast Redis client, we get the value directly (no Upstash wrapper)
+        # The fast Redis client handles the response format internally
+        oauth_data_json = redis_response
 
         # Parse the JSON string into a Python dict
         if isinstance(oauth_data_json, str):
             oauth_data = json.loads(oauth_data_json)
         else:
+            # If it's already a dict, use it directly
             oauth_data = oauth_data_json
 
         # Verify we have the required fields

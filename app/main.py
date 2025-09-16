@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger, setup_logging
 from app.routes import gmail_auth, health, onboarding, protected
+from app.services.redis_client import fast_redis
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -32,10 +33,12 @@ async def lifespan(app: FastAPI):
     """Handle application startup and shutdown."""
     # Startup
     logger.info("Application starting", environment=settings.environment, debug=settings.debug)
+    await fast_redis.initialize()
 
     yield
 
     # Shutdown
+    await fast_redis.close()
     logger.info("Application shutting down")
 
 
