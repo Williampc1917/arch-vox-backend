@@ -33,6 +33,23 @@ class Settings(BaseSettings):
 
     ENCRYPTION_KEY: str | None = None
 
+    # =================================================================
+    # DATABASE POOL SETTINGS - Simple and configurable
+    # =================================================================
+    DB_POOL_MIN_SIZE: int = 3
+    DB_POOL_MAX_SIZE: int = 12
+    DB_POOL_TIMEOUT: float = 30.0
+    DB_POOL_MAX_IDLE: float = 600.0      # 10 minutes
+    DB_POOL_MAX_LIFETIME: float = 3600.0  # 1 hour
+
+
+
+
+
+
+
+
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_PATH),
         env_file_encoding="utf-8",
@@ -64,5 +81,57 @@ class Settings(BaseSettings):
         # Default for local development
         return "http://localhost:8000/auth/gmail/callback"
 
+    def get_db_pool_config(self) -> dict:
+        """
+        Get database pool configuration.
+        Adjust environment-specific settings based on self.environment.
+        """
+        # Base configuration
+        config = {
+            "min_size": self.DB_POOL_MIN_SIZE,
+            "max_size": self.DB_POOL_MAX_SIZE,
+            "timeout": self.DB_POOL_TIMEOUT,
+            "max_idle": self.DB_POOL_MAX_IDLE,
+            "max_lifetime": self.DB_POOL_MAX_LIFETIME,
+        }
+
+        # Adjust for environment if needed
+        if self.environment == "development":
+            # More conservative for local development
+            config.update({
+                "min_size": min(self.DB_POOL_MIN_SIZE, 2),  # Cap at 2 for dev
+                "max_size": min(self.DB_POOL_MAX_SIZE, 5),  # Cap at 5 for dev
+                "timeout": 10.0,  # Shorter timeout for dev
+            })
+        elif self.environment == "production":
+            # Use the configured values as-is for production
+            pass
+
+        return config
+
 
 settings = Settings()
+
+# =================================================================
+# QUICK CONFIGURATION REFERENCE
+# =================================================================
+"""
+To change pool settings, just edit the values above:
+
+CONSERVATIVE (shared free tier):
+    DB_POOL_MIN_SIZE: int = 2
+    DB_POOL_MAX_SIZE: int = 6
+
+BALANCED (recommended for free tier):
+    DB_POOL_MIN_SIZE: int = 3
+    DB_POOL_MAX_SIZE: int = 12
+
+AGGRESSIVE (single app on free tier):
+    DB_POOL_MIN_SIZE: int = 5
+    DB_POOL_MAX_SIZE: int = 20
+
+LOAD TESTING (temporary high limits):
+    DB_POOL_MIN_SIZE: int = 10
+    DB_POOL_MAX_SIZE: int = 30
+
+"""

@@ -15,7 +15,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     
     # Database & Cache
-    "psycopg[binary]>=3.1.0",  # Supabase/Postgres
+    "psycopg[binary,pool]>=3.1.0",  # Supabase/Postgres with connection pooling
     "redis>=5.0.4",
     
     # HTTP & Auth
