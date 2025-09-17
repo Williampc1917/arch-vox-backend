@@ -92,9 +92,9 @@ class Settings(BaseSettings):
             # More conservative for local development
             config.update(
                 {
-                    "min_size": min(self.DB_POOL_MIN_SIZE, 2),  # Cap at 2 for dev
-                    "max_size": min(self.DB_POOL_MAX_SIZE, 5),  # Cap at 5 for dev
-                    "timeout": 10.0,  # Shorter timeout for dev
+                    "min_size": 4,  # Cap at 2 for dev
+                    "max_size": 8,  # Cap at 5 for dev
+                    "timeout": 15.0,  # Shorter timeout for dev
                 }
             )
         elif self.environment == "production":

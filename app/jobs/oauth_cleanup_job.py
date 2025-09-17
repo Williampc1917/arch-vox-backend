@@ -1,16 +1,16 @@
 """
 OAuth Cleanup Job for maintenance and monitoring.
 Handles cleanup of orphaned data and health monitoring across OAuth systems.
+REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
 import asyncio
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-import psycopg
 import requests
 
-from app.config import settings
+from app.db.helpers import DatabaseError, execute_query, fetch_one, fetch_all, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.services.encryption_service import EncryptionError, decrypt_token
 
@@ -157,6 +157,15 @@ class CleanupMetrics:
         }
 
 
+class OAuthCleanupJobError(Exception):
+    """Custom exception for OAuth cleanup job operations."""
+
+    def __init__(self, message: str, operation: str | None = None, recoverable: bool = True):
+        super().__init__(message)
+        self.operation = operation
+        self.recoverable = recoverable
+
+
 class OAuthCleanupJob:
     """
     Background job for OAuth system maintenance and monitoring.
@@ -169,18 +178,17 @@ class OAuthCleanupJob:
         self.is_running = False
         self.last_run_time: datetime | None = None
         self.job_metrics = CleanupMetrics()
-        self.db_url = settings.SUPABASE_DB_URL
-        self.redis_url = settings.UPSTASH_REDIS_REST_URL
-        self.redis_token = settings.UPSTASH_REDIS_REST_TOKEN
         self._validate_config()
 
     def _validate_config(self):
         """Validate job configuration."""
-        if not self.db_url:
-            raise ValueError("Database URL not configured for cleanup job")
-
-        if not self.redis_url or not self.redis_token:
-            logger.warning("Redis not configured - Redis cleanup will be skipped")
+        # Test database pool availability
+        try:
+            from app.db.pool import db_pool
+            if not db_pool._initialized:
+                raise OAuthCleanupJobError("Database pool not initialized")
+        except Exception as e:
+            raise OAuthCleanupJobError(f"Database pool validation failed: {e}") from e
 
         logger.info(
             "OAuth cleanup job configured",
@@ -253,10 +261,7 @@ class OAuthCleanupJob:
         """Run all cleanup tasks."""
 
         # Task 1: Clean up orphaned Redis state entries
-        if self.redis_url and self.redis_token:
-            await self._cleanup_redis_states()
-        else:
-            logger.info("Skipping Redis cleanup - Redis not configured")
+        await self._cleanup_redis_states()
 
         # Task 2: Check token health and remove invalid tokens
         await self._cleanup_invalid_tokens()
@@ -349,8 +354,17 @@ class OAuthCleanupJob:
         except Exception as e:
             self.job_metrics.record_processing_error("token_cleanup", str(e))
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _get_all_tokens(self) -> list[dict]:
-        """Get all OAuth tokens for health checking."""
+        """
+        Get all OAuth tokens for health checking.
+        
+        Returns:
+            list[dict]: List of token records
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             query = """
             SELECT user_id, access_token, refresh_token, expires_at,
@@ -360,37 +374,39 @@ class OAuthCleanupJob:
             ORDER BY updated_at DESC
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    rows = cur.fetchall()
+            # Use database pool helper function
+            rows = await fetch_all(query)
 
-                    tokens = []
-                    for row in rows:
-                        (
-                            user_id,
-                            access_token,
-                            refresh_token,
-                            expires_at,
-                            failure_count,
-                            last_attempt,
-                        ) = row
-                        tokens.append(
-                            {
-                                "user_id": str(user_id),
-                                "access_token": access_token,
-                                "refresh_token": refresh_token,
-                                "expires_at": expires_at,
-                                "refresh_failure_count": failure_count or 0,
-                                "last_refresh_attempt": last_attempt,
-                            }
-                        )
+            tokens = []
+            for row in rows:
+                row_values = list(row.values())
+                (
+                    user_id,
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    failure_count,
+                    last_attempt,
+                ) = row_values
+                tokens.append(
+                    {
+                        "user_id": str(user_id),
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "expires_at": expires_at,
+                        "refresh_failure_count": failure_count or 0,
+                        "last_refresh_attempt": last_attempt,
+                    }
+                )
 
-                    return tokens
+            return tokens
 
+        except DatabaseError as e:
+            logger.error("Database error fetching tokens for health check", error=str(e))
+            raise OAuthCleanupJobError(f"Database error fetching tokens: {e}", operation="get_tokens") from e
         except Exception as e:
-            logger.error(f"Error fetching tokens for health check: {e}")
-            return []
+            logger.error("Unexpected error fetching tokens for health check", error=str(e))
+            raise OAuthCleanupJobError(f"Failed to fetch tokens: {e}", operation="get_tokens") from e
 
     async def _check_token_health(self, token_record: dict) -> str:
         """
@@ -447,25 +463,51 @@ class OAuthCleanupJob:
             logger.warning(f"Error checking token health for user {user_id}: {e}")
             return "corrupted"
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _user_exists(self, user_id: str) -> bool:
-        """Check if user exists in the database."""
+        """
+        Check if user exists in the database.
+        
+        Args:
+            user_id: UUID string of the user
+            
+        Returns:
+            bool: True if user exists and is active, False otherwise
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             query = "SELECT 1 FROM users WHERE id = %s AND is_active = true"
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id,))
-                    return cur.fetchone() is not None
+            # Use database pool helper function
+            row = await fetch_one(query, (user_id,))
+            return row is not None
 
+        except DatabaseError as e:
+            logger.warning("Database error checking user existence", user_id=user_id, error=str(e))
+            raise OAuthCleanupJobError(f"Database error checking user: {e}", operation="user_exists") from e
         except Exception as e:
-            logger.warning(f"Error checking user existence for {user_id}: {e}")
-            return True  # Assume user exists if we can't check
+            logger.warning("Unexpected error checking user existence", user_id=user_id, error=str(e))
+            # Assume user exists if we can't check to avoid false removals
+            return True
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _remove_invalid_token(self, user_id: str, reason: str):
-        """Remove invalid token and update user status."""
+        """
+        Remove invalid token and update user status.
+        
+        Args:
+            user_id: UUID string of the user
+            reason: Reason for token removal
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             # Delete token record
             delete_query = "DELETE FROM oauth_tokens WHERE user_id = %s"
+            await execute_query(delete_query, (user_id,))
 
             # Update user status
             update_query = """
@@ -473,16 +515,16 @@ class OAuthCleanupJob:
             SET gmail_connected = false, updated_at = NOW()
             WHERE id = %s
             """
-
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(delete_query, (user_id,))
-                    cur.execute(update_query, (user_id,))
+            await execute_query(update_query, (user_id,))
 
             self.job_metrics.record_token_removal(user_id, reason)
 
+        except DatabaseError as e:
+            logger.error("Database error removing invalid token", user_id=user_id, error=str(e))
+            raise OAuthCleanupJobError(f"Database error removing token: {e}", operation="remove_token") from e
         except Exception as e:
-            logger.error(f"Error removing invalid token for user {user_id}: {e}")
+            logger.error("Unexpected error removing invalid token", user_id=user_id, error=str(e))
+            raise OAuthCleanupJobError(f"Failed to remove token: {e}", operation="remove_token") from e
 
     async def _fix_user_status_inconsistencies(self):
         """Fix inconsistencies between user status and token existence."""
@@ -502,8 +544,17 @@ class OAuthCleanupJob:
         except Exception as e:
             self.job_metrics.record_processing_error("status_consistency", str(e))
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _find_status_inconsistencies(self) -> list[str]:
-        """Find users with status inconsistencies."""
+        """
+        Find users with status inconsistencies.
+        
+        Returns:
+            list[str]: List of user IDs with inconsistent status
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             query = """
             SELECT u.id
@@ -514,18 +565,29 @@ class OAuthCleanupJob:
             AND ot.user_id IS NULL
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    rows = cur.fetchall()
-                    return [str(row[0]) for row in rows]
+            # Use database pool helper function
+            rows = await fetch_all(query)
 
+            return [str(list(row.values())[0]) for row in rows]
+
+        except DatabaseError as e:
+            logger.error("Database error finding status inconsistencies", error=str(e))
+            raise OAuthCleanupJobError(f"Database error finding inconsistencies: {e}", operation="find_inconsistencies") from e
         except Exception as e:
-            logger.error(f"Error finding status inconsistencies: {e}")
-            return []
+            logger.error("Unexpected error finding status inconsistencies", error=str(e))
+            raise OAuthCleanupJobError(f"Failed to find inconsistencies: {e}", operation="find_inconsistencies") from e
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _fix_user_status(self, user_id: str):
-        """Fix user status inconsistency."""
+        """
+        Fix user status inconsistency.
+        
+        Args:
+            user_id: UUID string of the user
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             query = """
             UPDATE users
@@ -543,16 +605,19 @@ class OAuthCleanupJob:
             WHERE id = %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id,))
+            # Use database pool helper function
+            await execute_query(query, (user_id,))
 
             self.job_metrics.record_user_status_fix(
                 user_id, "gmail_connected=true but no tokens found"
             )
 
+        except DatabaseError as e:
+            logger.error("Database error fixing user status", user_id=user_id, error=str(e))
+            raise OAuthCleanupJobError(f"Database error fixing status: {e}", operation="fix_status") from e
         except Exception as e:
-            logger.error(f"Error fixing user status for {user_id}: {e}")
+            logger.error("Unexpected error fixing user status", user_id=user_id, error=str(e))
+            raise OAuthCleanupJobError(f"Failed to fix status: {e}", operation="fix_status") from e
 
     async def _monitor_oauth_health(self):
         """Monitor overall OAuth system health and generate reports."""
@@ -629,12 +694,21 @@ class OAuthCleanupJob:
                     )
 
         except Exception as e:
-            logger.error(f"Error checking service health: {e}")
+            logger.error("Error checking service health", error=str(e))
 
         return health_issues
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
     async def _get_token_statistics(self) -> dict:
-        """Get token usage and health statistics."""
+        """
+        Get token usage and health statistics.
+        
+        Returns:
+            dict: Token statistics
+            
+        Raises:
+            OAuthCleanupJobError: If database operation fails
+        """
         try:
             query = """
             SELECT
@@ -648,27 +722,29 @@ class OAuthCleanupJob:
             WHERE provider = 'google'
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    row = cur.fetchone()
+            # Use database pool helper function
+            row = await fetch_one(query)
 
-                    if row:
-                        total, valid, expired, refreshable, avg_failures, last_activity = row
-                        return {
-                            "total_tokens": total or 0,
-                            "valid_tokens": valid or 0,
-                            "expired_tokens": expired or 0,
-                            "refreshable_tokens": refreshable or 0,
-                            "average_failure_count": round(float(avg_failures or 0), 2),
-                            "last_activity": last_activity.isoformat() if last_activity else None,
-                        }
+            if row:
+                row_values = list(row.values())
+                total, valid, expired, refreshable, avg_failures, last_activity = row_values
+                return {
+                    "total_tokens": total or 0,
+                    "valid_tokens": valid or 0,
+                    "expired_tokens": expired or 0,
+                    "refreshable_tokens": refreshable or 0,
+                    "average_failure_count": round(float(avg_failures or 0), 2),
+                    "last_activity": last_activity.isoformat() if last_activity else None,
+                }
 
             return {}
 
+        except DatabaseError as e:
+            logger.error("Database error getting token statistics", error=str(e))
+            raise OAuthCleanupJobError(f"Database error getting statistics: {e}", operation="get_statistics") from e
         except Exception as e:
-            logger.error(f"Error getting token statistics: {e}")
-            return {}
+            logger.error("Unexpected error getting token statistics", error=str(e))
+            raise OAuthCleanupJobError(f"Failed to get statistics: {e}", operation="get_statistics") from e
 
     async def _get_error_rates(self) -> dict:
         """Get recent error rates from logs (simplified version)."""

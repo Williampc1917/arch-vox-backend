@@ -1,19 +1,19 @@
 """
 User service for database operations.
 Handles fetching user profile data from the database with Gmail connection health.
+REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
 from datetime import UTC, datetime
 
-import psycopg
-
-from app.config import settings
+from app.db.helpers import DatabaseError, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.user_domain import Plan, UserProfile
 
 logger = get_logger(__name__)
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def get_user_profile(user_id: str) -> UserProfile | None:
     """
     Fetch complete user profile (user + settings + plan + Gmail health) from database.
@@ -45,83 +45,82 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
     """
 
     try:
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (user_id,))
-                row = cur.fetchone()
+        # Use database pool helper function instead of direct connection
+        row = await fetch_one(query, (user_id,))
 
-                if not row:
-                    logger.info("User not found or inactive", user_id=user_id)
-                    return None
+        if not row:
+            logger.info("User not found or inactive", user_id=user_id)
+            return None
 
-                # Unpack row data including Gmail token information
-                (
-                    id_val,
-                    email,
-                    display_name,
-                    is_active,
-                    timezone,
-                    onboarding_completed,
-                    gmail_connected,
-                    onboarding_step,
-                    created_at,
-                    updated_at,
-                    voice_preferences,
-                    plan_name,
-                    max_daily_requests,
-                    token_expires_at,
-                    refresh_failure_count,
-                    last_refresh_attempt,
-                    token_updated_at,
-                ) = row
+        # Unpack row data including Gmail token information
+        row_values = list(row.values())
+        (
+            id_val,
+            email,
+            display_name,
+            is_active,
+            timezone,
+            onboarding_completed,
+            gmail_connected,
+            onboarding_step,
+            created_at,
+            updated_at,
+            voice_preferences,
+            plan_name,
+            max_daily_requests,
+            token_expires_at,
+            refresh_failure_count,
+            last_refresh_attempt,
+            token_updated_at,
+        ) = row_values
 
-                # Build domain objects
-                plan = Plan(
-                    name=plan_name or "free",
-                    max_daily_requests=max_daily_requests or 100,
-                )
+        # Build domain objects
+        plan = Plan(
+            name=plan_name or "free",
+            max_daily_requests=max_daily_requests or 100,
+        )
 
-                # Create enhanced user profile with Gmail health
-                profile = UserProfile(
-                    user_id=str(id_val),
-                    email=email,
-                    display_name=display_name,
-                    is_active=is_active,
-                    timezone=timezone,
-                    onboarding_completed=onboarding_completed,
-                    gmail_connected=gmail_connected,
-                    onboarding_step=onboarding_step,
-                    voice_preferences=voice_preferences
-                    or {"tone": "professional", "speed": "normal"},
-                    plan=plan,
-                    created_at=created_at,
-                    updated_at=updated_at,
-                )
+        # Create enhanced user profile with Gmail health
+        profile = UserProfile(
+            user_id=str(id_val),
+            email=email,
+            display_name=display_name,
+            is_active=is_active,
+            timezone=timezone,
+            onboarding_completed=onboarding_completed,
+            gmail_connected=gmail_connected,
+            onboarding_step=onboarding_step,
+            voice_preferences=voice_preferences
+            or {"tone": "professional", "speed": "normal"},
+            plan=plan,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
 
-                # Add Gmail connection health information
-                profile = await _enhance_profile_with_gmail_health(
-                    profile,
-                    token_expires_at,
-                    refresh_failure_count,
-                    last_refresh_attempt,
-                    token_updated_at,
-                )
+        # Add Gmail connection health information
+        profile = await _enhance_profile_with_gmail_health(
+            profile,
+            token_expires_at,
+            refresh_failure_count,
+            last_refresh_attempt,
+            token_updated_at,
+        )
 
-                logger.info(
-                    "User profile retrieved with Gmail health",
-                    user_id=user_id,
-                    plan=plan.name,
-                    gmail_connected=gmail_connected,
-                    gmail_health=getattr(profile, "gmail_connection_health", "unknown"),
-                )
+        logger.info(
+            "User profile retrieved with Gmail health",
+            user_id=user_id,
+            plan=plan.name,
+            gmail_connected=gmail_connected,
+            gmail_health=getattr(profile, "gmail_connection_health", "unknown"),
+        )
 
-                return profile
+        return profile
 
-    except psycopg.Error as e:
-        logger.error("Database error", user_id=user_id, error=str(e))
+    except DatabaseError as e:
+        logger.error("Database error retrieving user profile", user_id=user_id, error=str(e))
         return None
     except Exception as e:
-        logger.error("Unexpected error", user_id=user_id, error=str(e))
+        logger.error("Unexpected error retrieving user profile", user_id=user_id, error=str(e))
         return None
 
 
@@ -196,8 +195,6 @@ async def _enhance_profile_with_gmail_health(
         profile.gmail_needs_refresh = False
 
         return profile
-
-    # Replace the _assess_gmail_connection_health function in app/services/user_service.py
 
 
 async def _assess_gmail_connection_health(
@@ -444,6 +441,7 @@ def _get_gmail_recommendations(gmail_summary: dict) -> list:
     return recommendations
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def get_users_needing_gmail_attention() -> list:
     """
     Get list of users whose Gmail connections need attention.
@@ -473,63 +471,66 @@ async def get_users_needing_gmail_attention() -> list:
         LIMIT 100
         """
 
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query)
-                rows = cur.fetchall()
+        # Use database pool helper function
+        rows = await fetch_all(query)
 
-                users_needing_attention = []
-                for row in rows:
-                    (
-                        user_id,
-                        email,
-                        display_name,
-                        gmail_connected,
-                        onboarding_step,
-                        onboarding_completed,
-                        expires_at,
-                        failure_count,
-                    ) = row
+        users_needing_attention = []
+        for row in rows:
+            row_values = list(row.values())
+            (
+                user_id,
+                email,
+                display_name,
+                gmail_connected,
+                onboarding_step,
+                onboarding_completed,
+                expires_at,
+                failure_count,
+            ) = row_values
 
-                    # Determine issue type
-                    issue_type = "unknown"
-                    if gmail_connected and not expires_at:
-                        issue_type = "missing_tokens"
-                    elif failure_count and failure_count >= 3:
-                        issue_type = "refresh_failures"
-                    elif (
-                        expires_at
-                        and expires_at < datetime.utcnow()
-                        and failure_count
-                        and failure_count > 0
-                    ):
-                        issue_type = "expired_with_failures"
+            # Determine issue type
+            issue_type = "unknown"
+            if gmail_connected and not expires_at:
+                issue_type = "missing_tokens"
+            elif failure_count and failure_count >= 3:
+                issue_type = "refresh_failures"
+            elif (
+                expires_at
+                and expires_at < datetime.now(UTC)
+                and failure_count
+                and failure_count > 0
+            ):
+                issue_type = "expired_with_failures"
 
-                    users_needing_attention.append(
-                        {
-                            "user_id": str(user_id),
-                            "email": email,
-                            "display_name": display_name,
-                            "gmail_connected": gmail_connected,
-                            "onboarding_step": onboarding_step,
-                            "onboarding_completed": onboarding_completed,
-                            "issue_type": issue_type,
-                            "token_expires_at": expires_at.isoformat() if expires_at else None,
-                            "refresh_failure_count": failure_count or 0,
-                        }
-                    )
+            users_needing_attention.append(
+                {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "display_name": display_name,
+                    "gmail_connected": gmail_connected,
+                    "onboarding_step": onboarding_step,
+                    "onboarding_completed": onboarding_completed,
+                    "issue_type": issue_type,
+                    "token_expires_at": expires_at.isoformat() if expires_at else None,
+                    "refresh_failure_count": failure_count or 0,
+                }
+            )
 
-                logger.info(
-                    "Found users needing Gmail attention", count=len(users_needing_attention)
-                )
+        logger.info(
+            "Found users needing Gmail attention", count=len(users_needing_attention)
+        )
 
-                return users_needing_attention
+        return users_needing_attention
 
+    except DatabaseError as e:
+        logger.error("Database error finding users needing Gmail attention", error=str(e))
+        return []
     except Exception as e:
         logger.error("Error finding users needing Gmail attention", error=str(e))
         return []
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def get_user_service_health() -> dict:
     """
     Get user service health status including Gmail connection statistics.
@@ -554,90 +555,89 @@ async def get_user_service_health() -> dict:
         WHERE u.is_active = true
         """
 
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query)
-                row = cur.fetchone()
+        # Use database pool helper function
+        row = await fetch_one(query)
 
-                if row:
-                    (
-                        total_users,
-                        gmail_connected,
-                        completed,
-                        stuck_on_gmail,
-                        with_tokens,
-                        with_valid_tokens,
-                        with_failing_tokens,
-                        avg_failures,
-                    ) = row
+        if row:
+            row_values = list(row.values())
+            (
+                total_users,
+                gmail_connected,
+                completed,
+                stuck_on_gmail,
+                with_tokens,
+                with_valid_tokens,
+                with_failing_tokens,
+                avg_failures,
+            ) = row_values
 
-                    # Calculate health metrics
-                    gmail_connection_rate = (
-                        (gmail_connected / total_users * 100) if total_users > 0 else 0
-                    )
-                    onboarding_completion_rate = (
-                        (completed / total_users * 100) if total_users > 0 else 0
-                    )
-                    token_consistency_rate = (
-                        (with_tokens / gmail_connected * 100) if gmail_connected > 0 else 100
-                    )
-                    token_health_rate = (
-                        (with_valid_tokens / with_tokens * 100) if with_tokens > 0 else 100
-                    )
+            # Calculate health metrics
+            gmail_connection_rate = (
+                (gmail_connected / total_users * 100) if total_users > 0 else 0
+            )
+            onboarding_completion_rate = (
+                (completed / total_users * 100) if total_users > 0 else 0
+            )
+            token_consistency_rate = (
+                (with_tokens / gmail_connected * 100) if gmail_connected > 0 else 100
+            )
+            token_health_rate = (
+                (with_valid_tokens / with_tokens * 100) if with_tokens > 0 else 100
+            )
 
-                    health_data = {
-                        "healthy": True,
-                        "service": "user_service",
-                        "database_connectivity": "ok",
-                        "user_metrics": {
-                            "total_active_users": total_users,
-                            "gmail_connected_users": gmail_connected,
-                            "completed_onboarding": completed,
-                            "stuck_on_gmail_step": stuck_on_gmail,
-                            "gmail_connection_rate_percent": round(gmail_connection_rate, 2),
-                            "onboarding_completion_rate_percent": round(
-                                onboarding_completion_rate, 2
-                            ),
-                        },
-                        "gmail_health_metrics": {
-                            "users_with_tokens": with_tokens,
-                            "users_with_valid_tokens": with_valid_tokens,
-                            "users_with_failing_tokens": with_failing_tokens,
-                            "token_consistency_rate_percent": round(token_consistency_rate, 2),
-                            "token_health_rate_percent": round(token_health_rate, 2),
-                            "average_failure_count": round(float(avg_failures or 0), 2),
-                        },
-                    }
+            health_data = {
+                "healthy": True,
+                "service": "user_service",
+                "database_connectivity": "ok",
+                "user_metrics": {
+                    "total_active_users": total_users,
+                    "gmail_connected_users": gmail_connected,
+                    "completed_onboarding": completed,
+                    "stuck_on_gmail_step": stuck_on_gmail,
+                    "gmail_connection_rate_percent": round(gmail_connection_rate, 2),
+                    "onboarding_completion_rate_percent": round(
+                        onboarding_completion_rate, 2
+                    ),
+                },
+                "gmail_health_metrics": {
+                    "users_with_tokens": with_tokens,
+                    "users_with_valid_tokens": with_valid_tokens,
+                    "users_with_failing_tokens": with_failing_tokens,
+                    "token_consistency_rate_percent": round(token_consistency_rate, 2),
+                    "token_health_rate_percent": round(token_health_rate, 2),
+                    "average_failure_count": round(float(avg_failures or 0), 2),
+                },
+            }
 
-                    # Mark as unhealthy if critical metrics are poor
-                    if (
-                        gmail_connection_rate < 50
-                        or token_consistency_rate < 90
-                        or token_health_rate < 80
-                        or with_failing_tokens > total_users * 0.1
-                    ):  # More than 10% failing
-                        health_data["healthy"] = False
-                        health_data["concerns"] = []
+            # Mark as unhealthy if critical metrics are poor
+            if (
+                gmail_connection_rate < 50
+                or token_consistency_rate < 90
+                or token_health_rate < 80
+                or with_failing_tokens > total_users * 0.1
+            ):  # More than 10% failing
+                health_data["healthy"] = False
+                health_data["concerns"] = []
 
-                        if gmail_connection_rate < 50:
-                            health_data["concerns"].append("Low Gmail connection rate")
-                        if token_consistency_rate < 90:
-                            health_data["concerns"].append("Token consistency issues")
-                        if token_health_rate < 80:
-                            health_data["concerns"].append("High token failure rate")
-                        if with_failing_tokens > total_users * 0.1:
-                            health_data["concerns"].append("Too many users with failing tokens")
+                if gmail_connection_rate < 50:
+                    health_data["concerns"].append("Low Gmail connection rate")
+                if token_consistency_rate < 90:
+                    health_data["concerns"].append("Token consistency issues")
+                if token_health_rate < 80:
+                    health_data["concerns"].append("High token failure rate")
+                if with_failing_tokens > total_users * 0.1:
+                    health_data["concerns"].append("Too many users with failing tokens")
 
-                    return health_data
+            return health_data
 
-                else:
-                    return {
-                        "healthy": False,
-                        "service": "user_service",
-                        "error": "No user data found",
-                    }
+        else:
+            return {
+                "healthy": False,
+                "service": "user_service",
+                "error": "No user data found",
+            }
 
-    except psycopg.Error as e:
+    except DatabaseError as e:
         logger.error("Database error in user service health check", error=str(e))
         return {
             "healthy": False,

@@ -1,6 +1,7 @@
 """
 Token Refresh Job for proactive OAuth token management.
 Runs as a background job to refresh tokens before they expire.
+REFACTORED: Now follows the same patterns as other services for consistency.
 """
 
 import asyncio
@@ -19,6 +20,15 @@ TOKEN_REFRESH_BUFFER_MINUTES = 15  # Refresh tokens expiring within 15 minutes
 BATCH_SIZE = 50  # Process users in batches
 MAX_CONCURRENT_REFRESHES = 10  # Limit concurrent refresh operations
 REFRESH_TIMEOUT_SECONDS = 30  # Timeout for individual refresh operations
+
+
+class TokenRefreshJobError(Exception):
+    """Custom exception for token refresh job operations."""
+
+    def __init__(self, message: str, operation: str | None = None, recoverable: bool = True):
+        super().__init__(message)
+        self.operation = operation
+        self.recoverable = recoverable
 
 
 class TokenRefreshMetrics:
@@ -132,8 +142,17 @@ class TokenRefreshJob:
         self.job_metrics = TokenRefreshMetrics()
         self._validate_config()
 
-    def _validate_config(self):
+    def _validate_config(self) -> None:
         """Validate job configuration."""
+        # Test database pool availability
+        try:
+            from app.db.pool import db_pool
+            if not db_pool._initialized:
+                raise TokenRefreshJobError("Database pool not initialized")
+        except Exception as e:
+            raise TokenRefreshJobError(f"Database pool validation failed: {e}") from e
+
+        # Validate job configuration parameters
         if JOB_INTERVAL_MINUTES < 5:
             logger.warning(
                 "Token refresh job interval is very short", interval_minutes=JOB_INTERVAL_MINUTES
@@ -158,6 +177,9 @@ class TokenRefreshJob:
 
         Returns:
             Dict: Job execution metrics and results
+
+        Raises:
+            TokenRefreshJobError: If job execution fails due to system errors
         """
         if self.is_running:
             logger.warning("Token refresh job already running, skipping this iteration")
@@ -174,9 +196,7 @@ class TokenRefreshJob:
             )
 
             # Get users with tokens expiring soon
-            expiring_users = token_service.get_tokens_expiring_soon(
-                provider="google", buffer_minutes=TOKEN_REFRESH_BUFFER_MINUTES
-            )
+            expiring_users = await self._get_expiring_users()
 
             if not expiring_users:
                 logger.info("No tokens found requiring refresh")
@@ -202,55 +222,100 @@ class TokenRefreshJob:
 
             return metrics
 
+        except TokenRefreshJobError:
+            raise  # Re-raise job-specific errors
         except Exception as e:
             logger.error("Token refresh job failed", error=str(e), error_type=type(e).__name__)
             self.job_metrics.finalize()
             metrics = self.job_metrics.to_dict()
             metrics["job_error"] = str(e)
-            return metrics
+            raise TokenRefreshJobError(f"Token refresh job failed: {e}", operation="run_once") from e
 
         finally:
             self.is_running = False
 
+    async def _get_expiring_users(self) -> list[str]:
+        """
+        Get users with tokens expiring soon.
+        
+        Returns:
+            list[str]: List of user IDs with expiring tokens
+            
+        Raises:
+            TokenRefreshJobError: If unable to fetch expiring users
+        """
+        try:
+            # Use the token service to get users with expiring tokens
+            expiring_users = await token_service.get_tokens_expiring_soon(
+                provider="google", buffer_minutes=TOKEN_REFRESH_BUFFER_MINUTES
+            )
+            
+            return expiring_users
+
+        except TokenServiceError as e:
+            logger.error("Token service error getting expiring users", error=str(e))
+            raise TokenRefreshJobError(f"Failed to get expiring users: {e}", operation="get_expiring_users") from e
+        except Exception as e:
+            logger.error("Unexpected error getting expiring users", error=str(e))
+            raise TokenRefreshJobError(f"Unexpected error getting expiring users: {e}", operation="get_expiring_users") from e
+
     async def _process_users_in_batches(self, user_ids: list[str]):
-        """Process users in batches with concurrency control."""
+        """
+        Process users in batches with concurrency control.
+        
+        Args:
+            user_ids: List of user IDs to process
+            
+        Raises:
+            TokenRefreshJobError: If batch processing fails
+        """
+        try:
+            # Split users into batches
+            batches = [user_ids[i : i + BATCH_SIZE] for i in range(0, len(user_ids), BATCH_SIZE)]
 
-        # Split users into batches
-        batches = [user_ids[i : i + BATCH_SIZE] for i in range(0, len(user_ids), BATCH_SIZE)]
-
-        logger.info(
-            "Processing users in batches",
-            total_users=len(user_ids),
-            batch_count=len(batches),
-            batch_size=BATCH_SIZE,
-        )
-
-        for batch_num, batch_users in enumerate(batches, 1):
-            logger.debug(
-                "Processing batch",
-                batch_number=batch_num,
-                batch_size=len(batch_users),
-                total_batches=len(batches),
+            logger.info(
+                "Processing users in batches",
+                total_users=len(user_ids),
+                batch_count=len(batches),
+                batch_size=BATCH_SIZE,
             )
 
-            # Create semaphore to limit concurrent operations
-            semaphore = asyncio.Semaphore(MAX_CONCURRENT_REFRESHES)
+            for batch_num, batch_users in enumerate(batches, 1):
+                logger.debug(
+                    "Processing batch",
+                    batch_number=batch_num,
+                    batch_size=len(batch_users),
+                    total_batches=len(batches),
+                )
 
-            # Process batch with concurrency limit
-            tasks = [
-                self._refresh_user_token_with_semaphore(semaphore, user_id)
-                for user_id in batch_users
-            ]
+                # Create semaphore to limit concurrent operations
+                semaphore = asyncio.Semaphore(MAX_CONCURRENT_REFRESHES)
 
-            # Wait for all tasks in batch to complete
-            await asyncio.gather(*tasks, return_exceptions=True)
+                # Process batch with concurrency limit
+                tasks = [
+                    self._refresh_user_token_with_semaphore(semaphore, user_id)
+                    for user_id in batch_users
+                ]
 
-            # Small delay between batches to avoid overwhelming services
-            if batch_num < len(batches):
-                await asyncio.sleep(1)
+                # Wait for all tasks in batch to complete
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Small delay between batches to avoid overwhelming services
+                if batch_num < len(batches):
+                    await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error("Error processing users in batches", error=str(e))
+            raise TokenRefreshJobError(f"Batch processing failed: {e}", operation="process_batches") from e
 
     async def _refresh_user_token_with_semaphore(self, semaphore: asyncio.Semaphore, user_id: str):
-        """Refresh token for a single user with concurrency control."""
+        """
+        Refresh token for a single user with concurrency control.
+        
+        Args:
+            semaphore: Semaphore to control concurrency
+            user_id: UUID string of the user
+        """
         async with semaphore:
             await self._refresh_user_token(user_id)
 
@@ -282,7 +347,7 @@ class TokenRefreshJob:
             if disconnected:
                 # Disconnect user if error is not recoverable
                 try:
-                    gmail_connection_service.disconnect_gmail(user_id)
+                    await gmail_connection_service.disconnect_gmail(user_id)
                 except Exception as disconnect_error:
                     logger.error(
                         "Failed to disconnect user after token refresh failure",
@@ -305,18 +370,34 @@ class TokenRefreshJob:
         """
         Perform the actual token refresh operation.
 
-        This method is separated to make it easier to add timeout handling.
+        Args:
+            user_id: UUID string of the user
+            
+        Raises:
+            TokenServiceError: If refresh fails
+            
+        Note:
+            This method is separated to make it easier to add timeout handling.
         """
-        # Use the gmail connection service for high-level refresh
-        # This handles user status updates and proper error handling
-        success = gmail_connection_service.refresh_connection(user_id)
+        try:
+            # Use the gmail connection service for high-level refresh
+            # This handles user status updates and proper error handling
+            success = await gmail_connection_service.refresh_connection(user_id)
 
-        if not success:
+            if not success:
+                raise TokenServiceError(
+                    "Token refresh failed through gmail connection service",
+                    user_id=user_id,
+                    recoverable=False,
+                )
+
+        except GmailConnectionError as e:
+            # Re-raise as TokenServiceError for consistent error handling
             raise TokenServiceError(
-                "Token refresh failed through gmail connection service",
+                f"Gmail connection error during refresh: {e}",
                 user_id=user_id,
-                recoverable=False,
-            )
+                recoverable=getattr(e, "recoverable", True),
+            ) from e
 
     def get_job_status(self) -> dict:
         """

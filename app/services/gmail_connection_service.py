@@ -1,13 +1,12 @@
 """
 Gmail Connection Service for high-level OAuth orchestration.
 Coordinates OAuth flow, user status updates, and connection management.
+REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
 from datetime import datetime
 
-import psycopg
-
-from app.config import settings
+from app.db.helpers import DatabaseError, execute_query, fetch_one, fetch_all, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
 from app.services.google_oauth_service import (
@@ -34,10 +33,11 @@ logger = get_logger(__name__)
 class GmailConnectionError(Exception):
     """Custom exception for Gmail connection operations."""
 
-    def __init__(self, message: str, user_id: str | None = None, error_code: str | None = None):
+    def __init__(self, message: str, user_id: str | None = None, error_code: str | None = None, recoverable: bool = True):
         super().__init__(message)
         self.user_id = user_id
         self.error_code = error_code
+        self.recoverable = recoverable
 
 
 class GmailConnectionStatus:
@@ -85,14 +85,22 @@ class GmailConnectionService:
     """
 
     def __init__(self):
-        self.db_url = settings.SUPABASE_DB_URL
-        self._validate_config()
+        self._config_validated = False
 
-    def _validate_config(self) -> None:
-        """Validate service configuration."""
-        if not self.db_url:
-            raise GmailConnectionError("Database URL not configured")
+    def _ensure_config_validated(self) -> None:
+        """Validate service configuration when first used."""
+        if self._config_validated:
+            return
+            
+        # Test database pool availability
+        try:
+            from app.db.pool import db_pool
+            if not db_pool._initialized:
+                raise GmailConnectionError("Database pool not initialized")
+        except Exception as e:
+            raise GmailConnectionError(f"Database pool validation failed: {e}") from e
 
+        self._config_validated = True
         logger.info("Gmail connection service initialized successfully")
 
     def initiate_oauth_flow(self, user_id: str) -> tuple[str, str]:
@@ -108,6 +116,8 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If OAuth initiation fails
         """
+        self._ensure_config_validated()
+        
         try:
             logger.info("Initiating Gmail OAuth flow", user_id=user_id)
 
@@ -163,6 +173,8 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If OAuth completion fails
         """
+        self._ensure_config_validated()
+        
         try:
             logger.info(
                 "Completing Gmail OAuth flow",
@@ -253,6 +265,8 @@ class GmailConnectionService:
         Returns:
             GmailConnectionStatus: Complete connection status information
         """
+        self._ensure_config_validated()
+        
         try:
             logger.debug("Getting Gmail connection status", user_id=user_id)
 
@@ -314,6 +328,8 @@ class GmailConnectionService:
         Returns:
             bool: True if disconnection successful
         """
+        self._ensure_config_validated()
+        
         try:
             logger.info("Disconnecting Gmail for user", user_id=user_id)
 
@@ -355,6 +371,8 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If refresh fails due to system errors
         """
+        self._ensure_config_validated()
+        
         try:
             logger.info("Refreshing Gmail connection", user_id=user_id)
 
@@ -409,30 +427,40 @@ class GmailConnectionService:
             )
             raise GmailConnectionError(f"Connection refresh failed: {e}", user_id=user_id) from e
 
-    def _get_user_gmail_status(self, user_id: str) -> bool:
-        """Get Gmail connection status from users table."""
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _get_user_gmail_status(self, user_id: str) -> bool:
+        """
+        Get Gmail connection status from users table.
+        
+        Args:
+            user_id: UUID string of the user
+            
+        Returns:
+            bool: True if user has Gmail connected, False otherwise
+            
+        Raises:
+            GmailConnectionError: If database operation fails
+        """
         try:
             query = "SELECT gmail_connected FROM users WHERE id = %s AND is_active = true"
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id,))
-                    row = cur.fetchone()
+            # Use database pool helper function
+            row = await fetch_one(query, (user_id,))
 
-                    if row:
-                        return bool(row[0])
-                    else:
-                        logger.warning("User not found or inactive", user_id=user_id)
-                        return False
+            if row:
+                gmail_connected = list(row.values())[0]
+                return bool(gmail_connected)
+            else:
+                logger.warning("User not found or inactive", user_id=user_id)
+                return False
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error getting user Gmail status",
                 user_id=user_id,
                 error=str(e),
-                error_type=type(e).__name__,
             )
-            return False
+            raise GmailConnectionError(f"Database error getting Gmail status: {e}", user_id=user_id) from e
         except Exception as e:
             logger.error(
                 "Unexpected error getting user Gmail status",
@@ -440,10 +468,23 @@ class GmailConnectionService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            return False
+            raise GmailConnectionError(f"Failed to get Gmail status: {e}", user_id=user_id) from e
 
-    def _update_user_gmail_status(self, user_id: str, connected: bool) -> bool:
-        """Update Gmail connection status in users table."""
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _update_user_gmail_status(self, user_id: str, connected: bool) -> bool:
+        """
+        Update Gmail connection status in users table.
+        
+        Args:
+            user_id: UUID string of the user
+            connected: Whether Gmail is connected or not
+            
+        Returns:
+            bool: True if update successful, False otherwise
+            
+        Raises:
+            GmailConnectionError: If database operation fails
+        """
         try:
             # Update gmail_connected and potentially onboarding_step
             if connected:
@@ -471,12 +512,10 @@ class GmailConnectionService:
                 WHERE id = %s AND is_active = true
                 """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (connected, user_id))
-                    updated_count = cur.rowcount
+            # Use database pool helper function
+            affected_rows = await execute_query(query, (connected, user_id))
 
-            success = updated_count > 0
+            success = affected_rows > 0
 
             if success:
                 logger.info("User Gmail status updated", user_id=user_id, connected=connected)
@@ -487,15 +526,14 @@ class GmailConnectionService:
 
             return success
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error updating user Gmail status",
                 user_id=user_id,
                 connected=connected,
                 error=str(e),
-                error_type=type(e).__name__,
             )
-            return False
+            raise GmailConnectionError(f"Database error updating Gmail status: {e}", user_id=user_id) from e
         except Exception as e:
             logger.error(
                 "Unexpected error updating user Gmail status",
@@ -504,10 +542,19 @@ class GmailConnectionService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            return False
+            raise GmailConnectionError(f"Failed to update Gmail status: {e}", user_id=user_id) from e
 
-    def _handle_disconnect_onboarding_update(self, user_id: str) -> None:
-        """Handle onboarding step updates when disconnecting Gmail."""
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _handle_disconnect_onboarding_update(self, user_id: str) -> None:
+        """
+        Handle onboarding step updates when disconnecting Gmail.
+        
+        Args:
+            user_id: UUID string of the user
+            
+        Raises:
+            GmailConnectionError: If database operation fails
+        """
         try:
             # If user was on 'completed' step, move back to 'gmail'
             # If user was on 'gmail' step, move back to 'profile'
@@ -526,18 +573,26 @@ class GmailConnectionService:
             WHERE id = %s AND is_active = true
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id,))
+            # Use database pool helper function
+            await execute_query(query, (user_id,))
 
             logger.debug("Onboarding step updated after Gmail disconnect", user_id=user_id)
 
+        except DatabaseError as e:
+            logger.error(
+                "Database error updating onboarding step after disconnect",
+                user_id=user_id,
+                error=str(e),
+            )
+            raise GmailConnectionError(f"Database error updating onboarding: {e}", user_id=user_id) from e
         except Exception as e:
             logger.warning(
                 "Failed to update onboarding step after Gmail disconnect",
                 user_id=user_id,
                 error=str(e),
             )
+            # Don't raise exception for onboarding updates - they're not critical
+            logger.debug("Onboarding update failure is non-critical", user_id=user_id)
 
     def _assess_connection_health(self, tokens: OAuthToken) -> str:
         """Assess the health of the Gmail connection."""
@@ -559,12 +614,16 @@ class GmailConnectionService:
             )
             return "unknown"
 
-    def get_connection_metrics(self) -> dict[str, any]:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def get_connection_metrics(self) -> dict[str, any]:
         """
         Get Gmail connection metrics for monitoring.
 
         Returns:
             dict: Connection metrics and statistics
+            
+        Raises:
+            GmailConnectionError: If database operation fails
         """
         try:
             query = """
@@ -576,32 +635,34 @@ class GmailConnectionService:
             WHERE is_active = true
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    row = cur.fetchone()
+            # Use database pool helper function
+            row = await fetch_one(query)
 
-                    if row:
-                        total_users, connected_users, completed_users = row
+            if row:
+                row_values = list(row.values())
+                total_users, connected_users, completed_users = row_values
 
-                        # Calculate connection rate
-                        connection_rate = (
-                            (connected_users / total_users * 100) if total_users > 0 else 0
-                        )
+                # Calculate connection rate
+                connection_rate = (
+                    (connected_users / total_users * 100) if total_users > 0 else 0
+                )
 
-                        return {
-                            "total_users": total_users,
-                            "connected_users": connected_users,
-                            "completed_users": completed_users,
-                            "connection_rate_percent": round(connection_rate, 2),
-                            "healthy": True,
-                        }
+                return {
+                    "total_users": total_users,
+                    "connected_users": connected_users,
+                    "completed_users": completed_users,
+                    "connection_rate_percent": round(connection_rate, 2),
+                    "healthy": True,
+                }
 
             return {"healthy": False, "error": "No data returned"}
 
+        except DatabaseError as e:
+            logger.error("Database error getting connection metrics", error=str(e))
+            raise GmailConnectionError(f"Database error getting metrics: {e}", operation="get_metrics") from e
         except Exception as e:
             logger.error("Error getting connection metrics", error=str(e))
-            return {"healthy": False, "error": str(e)}
+            raise GmailConnectionError(f"Failed to get connection metrics: {e}", operation="get_metrics") from e
 
     def health_check(self) -> dict[str, any]:
         """

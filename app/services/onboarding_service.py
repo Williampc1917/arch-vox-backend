@@ -1,18 +1,26 @@
 """
 Onboarding service for managing user onboarding flow.
 Handles onboarding status, profile updates, and completion with Gmail integration.
+REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 
 Service layer returns domain models only - API layer handles HTTP concerns.
 """
 
-import psycopg
-
-from app.config import settings
+from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.user_domain import UserProfile
 from app.services.user_service import get_user_profile
 
 logger = get_logger(__name__)
+
+
+class OnboardingServiceError(Exception):
+    """Custom exception for onboarding service operations."""
+
+    def __init__(self, message: str, user_id: str | None = None, recoverable: bool = True):
+        super().__init__(message)
+        self.user_id = user_id
+        self.recoverable = recoverable
 
 
 async def get_onboarding_status(user_id: str) -> UserProfile | None:
@@ -50,6 +58,7 @@ async def get_onboarding_status(user_id: str) -> UserProfile | None:
         return None
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def update_profile_name(
     user_id: str, display_name: str, timezone: str = "UTC"
 ) -> UserProfile | None:
@@ -64,58 +73,60 @@ async def update_profile_name(
     Returns:
         Updated UserProfile domain model if successful, None if failed
 
+    Raises:
+        OnboardingServiceError: If update fails due to system errors
+
     Note:
         Only updates display_name during onboarding. Timezone is auto-detected
         by iOS and stored but not required as user input.
         Advances to 'gmail' step to prepare for Gmail connection.
     """
-    query = """
-    UPDATE users
-    SET
-        display_name = %s,
-        timezone = %s,
-        onboarding_step = 'gmail',
-        updated_at = NOW()
-    WHERE
-        id = %s
-        AND onboarding_step = 'start'
-        AND is_active = true
-    """
-
     try:
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                # Execute the update
-                cur.execute(query, (display_name, timezone, user_id))
+        query = """
+        UPDATE users
+        SET
+            display_name = %s,
+            timezone = %s,
+            onboarding_step = 'gmail',
+            updated_at = NOW()
+        WHERE
+            id = %s
+            AND onboarding_step = 'start'
+            AND is_active = true
+        """
 
-                # Check if any rows were updated
-                if cur.rowcount == 0:
-                    logger.warning(
-                        "Profile update failed - user not found or not in 'start' step",
-                        user_id=user_id,
-                        current_step="unknown",
-                    )
-                    return None
+        # Use database pool helper function
+        affected_rows = await execute_query(query, (display_name, timezone, user_id))
 
-                logger.info(
-                    "Profile name updated successfully",
-                    user_id=user_id,
-                    display_name=display_name,
-                    timezone=timezone,
-                    step_transition="start → gmail",
-                )
+        # Check if any rows were updated
+        if affected_rows == 0:
+            logger.warning(
+                "Profile update failed - user not found or not in 'start' step",
+                user_id=user_id,
+                current_step="unknown",
+            )
+            return None
 
-                # Return updated user profile (domain model)
-                return await get_user_profile(user_id)
+        logger.info(
+            "Profile name updated successfully",
+            user_id=user_id,
+            display_name=display_name,
+            timezone=timezone,
+            step_transition="start → gmail",
+        )
 
-    except psycopg.Error as e:
+        # Return updated user profile (domain model)
+        return await get_user_profile(user_id)
+
+    except DatabaseError as e:
         logger.error("Database error updating profile name", user_id=user_id, error=str(e))
-        return None
+        raise OnboardingServiceError(f"Database error updating profile: {e}", user_id=user_id) from e
     except Exception as e:
         logger.error("Unexpected error updating profile name", user_id=user_id, error=str(e))
-        return None
+        raise OnboardingServiceError(f"Profile update failed: {e}", user_id=user_id) from e
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def complete_onboarding(user_id: str) -> UserProfile | None:
     """
     Mark onboarding as completed and advance to 'completed' step.
@@ -126,6 +137,9 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
     Returns:
         Updated UserProfile domain model if successful, None if failed
 
+    Raises:
+        OnboardingServiceError: If completion fails due to system errors
+
     Prerequisites:
         - User must be on 'gmail' step
         - User must have gmail_connected = true (ENFORCED via Gmail OAuth integration)
@@ -134,89 +148,92 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         This function now strictly validates Gmail connection before allowing
         onboarding completion, ensuring users have connected Gmail successfully.
     """
-    # First, validate prerequisites with detailed logging
-    profile = await get_user_profile(user_id)
-    if not profile:
-        logger.warning("Onboarding completion failed - user not found", user_id=user_id)
-        return None
-
-    # Validate current onboarding step
-    if profile.onboarding_step != "gmail":
-        logger.warning(
-            "Onboarding completion failed - invalid step",
-            user_id=user_id,
-            current_step=profile.onboarding_step,
-            required_step="gmail",
-        )
-        return None
-
-    # Validate Gmail connection (CRITICAL REQUIREMENT)
-    if not profile.gmail_connected:
-        logger.warning(
-            "Onboarding completion failed - Gmail not connected",
-            user_id=user_id,
-            gmail_connected=profile.gmail_connected,
-            onboarding_step=profile.onboarding_step,
-        )
-        return None
-
-    # Additional validation: Check if Gmail tokens actually exist
-    gmail_connection_valid = await _validate_gmail_connection(user_id)
-    if not gmail_connection_valid:
-        logger.warning(
-            "Onboarding completion failed - Gmail connection invalid (no tokens found)",
-            user_id=user_id,
-        )
-        # Fix inconsistent state: user marked as connected but no tokens
-        await _fix_gmail_connection_state(user_id)
-        return None
-
-    # All prerequisites met - proceed with completion
-    query = """
-    UPDATE users
-    SET
-        onboarding_completed = true,
-        onboarding_step = 'completed',
-        updated_at = NOW()
-    WHERE
-        id = %s
-        AND onboarding_step = 'gmail'
-        AND gmail_connected = true
-        AND is_active = true
-    """
-
     try:
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                # Execute the update
-                cur.execute(query, (user_id,))
+        # First, validate prerequisites with detailed logging
+        profile = await get_user_profile(user_id)
+        if not profile:
+            logger.warning("Onboarding completion failed - user not found", user_id=user_id)
+            raise OnboardingServiceError("User not found", user_id=user_id)
 
-                # Check if any rows were updated
-                if cur.rowcount == 0:
-                    logger.error(
-                        "Onboarding completion failed - database update failed despite validation",
-                        user_id=user_id,
-                    )
-                    return None
+        # Validate current onboarding step
+        if profile.onboarding_step != "gmail":
+            logger.warning(
+                "Onboarding completion failed - invalid step",
+                user_id=user_id,
+                current_step=profile.onboarding_step,
+                required_step="gmail",
+            )
+            raise OnboardingServiceError(
+                f"Invalid onboarding step: {profile.onboarding_step}", user_id=user_id
+            )
 
-                logger.info(
-                    "Onboarding completed successfully",
-                    user_id=user_id,
-                    step_transition="gmail → completed",
-                    gmail_connected=True,
-                )
+        # Validate Gmail connection (CRITICAL REQUIREMENT)
+        if not profile.gmail_connected:
+            logger.warning(
+                "Onboarding completion failed - Gmail not connected",
+                user_id=user_id,
+                gmail_connected=profile.gmail_connected,
+                onboarding_step=profile.onboarding_step,
+            )
+            raise OnboardingServiceError("Gmail not connected", user_id=user_id)
 
-                # Return updated user profile (domain model)
-                return await get_user_profile(user_id)
+        # Additional validation: Check if Gmail tokens actually exist
+        gmail_connection_valid = await _validate_gmail_connection(user_id)
+        if not gmail_connection_valid:
+            logger.warning(
+                "Onboarding completion failed - Gmail connection invalid (no tokens found)",
+                user_id=user_id,
+            )
+            # Fix inconsistent state: user marked as connected but no tokens
+            await _fix_gmail_connection_state(user_id)
+            raise OnboardingServiceError("Gmail connection invalid", user_id=user_id)
 
-    except psycopg.Error as e:
+        # All prerequisites met - proceed with completion
+        query = """
+        UPDATE users
+        SET
+            onboarding_completed = true,
+            onboarding_step = 'completed',
+            updated_at = NOW()
+        WHERE
+            id = %s
+            AND onboarding_step = 'gmail'
+            AND gmail_connected = true
+            AND is_active = true
+        """
+
+        # Use database pool helper function
+        affected_rows = await execute_query(query, (user_id,))
+
+        # Check if any rows were updated
+        if affected_rows == 0:
+            logger.error(
+                "Onboarding completion failed - database update failed despite validation",
+                user_id=user_id,
+            )
+            raise OnboardingServiceError("Database update failed", user_id=user_id)
+
+        logger.info(
+            "Onboarding completed successfully",
+            user_id=user_id,
+            step_transition="gmail → completed",
+            gmail_connected=True,
+        )
+
+        # Return updated user profile (domain model)
+        return await get_user_profile(user_id)
+
+    except OnboardingServiceError:
+        raise  # Re-raise onboarding service errors
+    except DatabaseError as e:
         logger.error("Database error completing onboarding", user_id=user_id, error=str(e))
-        return None
+        raise OnboardingServiceError(f"Database error completing onboarding: {e}", user_id=user_id) from e
     except Exception as e:
         logger.error("Unexpected error completing onboarding", user_id=user_id, error=str(e))
-        return None
+        raise OnboardingServiceError(f"Onboarding completion failed: {e}", user_id=user_id) from e
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def _validate_gmail_connection(user_id: str) -> bool:
     """
     Validate that Gmail connection actually exists (tokens in database).
@@ -226,30 +243,39 @@ async def _validate_gmail_connection(user_id: str) -> bool:
 
     Returns:
         bool: True if Gmail tokens exist, False otherwise
+
+    Raises:
+        OnboardingServiceError: If validation fails due to system errors
     """
     try:
         query = "SELECT 1 FROM oauth_tokens WHERE user_id = %s AND provider = 'google'"
 
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (user_id,))
-                has_tokens = cur.fetchone() is not None
+        # Use database pool helper function
+        row = await fetch_one(query, (user_id,))
+        has_tokens = row is not None
 
-                logger.debug("Gmail connection validation", user_id=user_id, has_tokens=has_tokens)
+        logger.debug("Gmail connection validation", user_id=user_id, has_tokens=has_tokens)
 
-                return has_tokens
+        return has_tokens
 
+    except DatabaseError as e:
+        logger.error("Database error validating Gmail connection", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(f"Database error validating Gmail connection: {e}", user_id=user_id) from e
     except Exception as e:
         logger.error("Error validating Gmail connection", user_id=user_id, error=str(e))
-        return False
+        raise OnboardingServiceError(f"Gmail connection validation failed: {e}", user_id=user_id) from e
 
 
+@with_db_retry(max_retries=3, base_delay=0.1)
 async def _fix_gmail_connection_state(user_id: str) -> None:
     """
     Fix inconsistent state where user is marked as Gmail connected but has no tokens.
 
     Args:
         user_id: UUID string of the user
+
+    Raises:
+        OnboardingServiceError: If fix fails due to system errors
     """
     try:
         query = """
@@ -258,18 +284,21 @@ async def _fix_gmail_connection_state(user_id: str) -> None:
         WHERE id = %s
         """
 
-        with psycopg.connect(settings.SUPABASE_DB_URL, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (user_id,))
+        # Use database pool helper function
+        await execute_query(query, (user_id,))
 
-                logger.info(
-                    "Fixed Gmail connection state inconsistency",
-                    user_id=user_id,
-                    action="set_gmail_connected_false",
-                )
+        logger.info(
+            "Fixed Gmail connection state inconsistency",
+            user_id=user_id,
+            action="set_gmail_connected_false",
+        )
 
+    except DatabaseError as e:
+        logger.error("Database error fixing Gmail connection state", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(f"Database error fixing Gmail state: {e}", user_id=user_id) from e
     except Exception as e:
         logger.error("Error fixing Gmail connection state", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(f"Failed to fix Gmail connection state: {e}", user_id=user_id) from e
 
 
 async def get_onboarding_completion_requirements(user_id: str) -> dict:
@@ -307,9 +336,14 @@ async def get_onboarding_completion_requirements(user_id: str) -> dict:
         }
 
         # Validate Gmail tokens exist
-        has_tokens = await _validate_gmail_connection(user_id)
-        requirements["gmail_tokens_exist"]["current"] = has_tokens
-        requirements["gmail_tokens_exist"]["satisfied"] = has_tokens
+        try:
+            has_tokens = await _validate_gmail_connection(user_id)
+            requirements["gmail_tokens_exist"]["current"] = has_tokens
+            requirements["gmail_tokens_exist"]["satisfied"] = has_tokens
+        except OnboardingServiceError:
+            # If validation fails, assume no tokens
+            requirements["gmail_tokens_exist"]["current"] = False
+            requirements["gmail_tokens_exist"]["satisfied"] = False
 
         # Overall completion eligibility
         can_complete = all(req["satisfied"] for req in requirements.values())

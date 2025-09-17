@@ -1,13 +1,12 @@
 """
 Token Service for OAuth token lifecycle management.
 Handles encryption, storage, expiration, refresh, and cleanup of OAuth tokens.
+REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
 from datetime import UTC, datetime, timedelta
 
-import psycopg
-
-from app.config import settings
+from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
 from app.services.encryption_service import (
@@ -48,14 +47,10 @@ class TokenService:
     """
 
     def __init__(self):
-        self.db_url = settings.SUPABASE_DB_URL
         self._validate_config()
 
     def _validate_config(self) -> None:
         """Validate token service configuration."""
-        if not self.db_url:
-            raise TokenServiceError("Database URL not configured")
-
         # Test encryption service availability
         try:
             from app.services.encryption_service import validate_encryption_config
@@ -67,7 +62,8 @@ class TokenService:
 
         logger.info("Token service initialized successfully")
 
-    def store_tokens(
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def store_tokens(
         self, user_id: str, token_response: TokenResponse, provider: str = "google"
     ) -> bool:
         """
@@ -109,31 +105,33 @@ class TokenService:
                 last_refresh_attempt = NULL
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        query,
-                        (
-                            user_id,
-                            provider,
-                            encrypted_access,
-                            encrypted_refresh,
-                            token_response.scope,
-                            token_response.expires_at,
-                        ),
-                    )
-
-            logger.info(
-                "OAuth tokens stored successfully",
-                user_id=user_id,
-                provider=provider,
-                has_refresh_token=bool(token_response.refresh_token),
-                expires_at=(
-                    token_response.expires_at.isoformat() if token_response.expires_at else None
+            # Use database pool helper function
+            affected_rows = await execute_query(
+                query,
+                (
+                    user_id,
+                    provider,
+                    encrypted_access,
+                    encrypted_refresh,
+                    token_response.scope,
+                    token_response.expires_at,
                 ),
             )
 
-            return True
+            success = affected_rows > 0
+
+            if success:
+                logger.info(
+                    "OAuth tokens stored successfully",
+                    user_id=user_id,
+                    provider=provider,
+                    has_refresh_token=bool(token_response.refresh_token),
+                    expires_at=(
+                        token_response.expires_at.isoformat() if token_response.expires_at else None
+                    ),
+                )
+
+            return success
 
         except EncryptionError as e:
             logger.error(
@@ -141,13 +139,12 @@ class TokenService:
             )
             raise TokenServiceError(f"Token encryption failed: {e}", user_id=user_id) from e
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error storing tokens",
                 user_id=user_id,
                 provider=provider,
                 error=str(e),
-                error_type=type(e).__name__,
             )
             raise TokenServiceError(f"Database error storing tokens: {e}", user_id=user_id) from e
 
@@ -161,7 +158,8 @@ class TokenService:
             )
             raise TokenServiceError(f"Token storage failed: {e}", user_id=user_id) from e
 
-    def get_tokens(self, user_id: str, provider: str = "google") -> OAuthToken | None:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def get_tokens(self, user_id: str, provider: str = "google") -> OAuthToken | None:
         """
         Retrieve and decrypt OAuth tokens for user.
 
@@ -182,42 +180,42 @@ class TokenService:
             WHERE user_id = %s AND provider = %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id, provider))
-                    row = cur.fetchone()
+            # Use database pool helper function
+            row = await fetch_one(query, (user_id, provider))
 
-                    if not row:
-                        logger.debug("No tokens found for user", user_id=user_id, provider=provider)
-                        return None
+            if not row:
+                logger.debug("No tokens found for user", user_id=user_id, provider=provider)
+                return None
 
-                    encrypted_access, encrypted_refresh, scope, expires_at, updated_at = row
+            # Unpack row data
+            row_values = list(row.values())
+            encrypted_access, encrypted_refresh, scope, expires_at, updated_at = row_values
 
-                    # Decrypt tokens
-                    access_token, refresh_token = decrypt_oauth_tokens(
-                        encrypted_access=encrypted_access, encrypted_refresh=encrypted_refresh
-                    )
+            # Decrypt tokens
+            access_token, refresh_token = decrypt_oauth_tokens(
+                encrypted_access=encrypted_access, encrypted_refresh=encrypted_refresh
+            )
 
-                    # Create domain object
-                    oauth_token = OAuthToken(
-                        user_id=user_id,
-                        provider=provider,
-                        access_token=access_token,
-                        refresh_token=refresh_token,
-                        scope=scope,
-                        expires_at=expires_at,
-                        updated_at=updated_at,
-                    )
+            # Create domain object
+            oauth_token = OAuthToken(
+                user_id=user_id,
+                provider=provider,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                scope=scope,
+                expires_at=expires_at,
+                updated_at=updated_at,
+            )
 
-                    logger.debug(
-                        "Tokens retrieved successfully",
-                        user_id=user_id,
-                        provider=provider,
-                        expires_at=expires_at.isoformat() if expires_at else None,
-                        is_expired=oauth_token.is_expired(),
-                    )
+            logger.debug(
+                "Tokens retrieved successfully",
+                user_id=user_id,
+                provider=provider,
+                expires_at=expires_at.isoformat() if expires_at else None,
+                is_expired=oauth_token.is_expired(),
+            )
 
-                    return oauth_token
+            return oauth_token
 
         except EncryptionError as e:
             logger.error(
@@ -225,13 +223,12 @@ class TokenService:
             )
             raise TokenServiceError(f"Token decryption failed: {e}", user_id=user_id) from e
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error retrieving tokens",
                 user_id=user_id,
                 provider=provider,
                 error=str(e),
-                error_type=type(e).__name__,
             )
             raise TokenServiceError(
                 f"Database error retrieving tokens: {e}", user_id=user_id
@@ -247,7 +244,7 @@ class TokenService:
             )
             raise TokenServiceError(f"Token retrieval failed: {e}", user_id=user_id) from e
 
-    def refresh_token_if_needed(self, user_id: str, provider: str = "google") -> OAuthToken | None:
+    async def refresh_token_if_needed(self, user_id: str, provider: str = "google") -> OAuthToken | None:
         """
         Check token expiration and refresh if needed (on-demand refresh).
 
@@ -263,7 +260,7 @@ class TokenService:
         """
         try:
             # Get current tokens
-            current_tokens = self.get_tokens(user_id, provider)
+            current_tokens = await self.get_tokens(user_id, provider)
             if not current_tokens:
                 logger.debug("No tokens to refresh", user_id=user_id, provider=provider)
                 return None
@@ -281,7 +278,7 @@ class TokenService:
                 return current_tokens
 
             # Perform refresh
-            return self._perform_token_refresh(user_id, current_tokens, provider)
+            return await self._perform_token_refresh(user_id, current_tokens, provider)
 
         except TokenServiceError:
             raise  # Re-raise token service errors
@@ -295,7 +292,7 @@ class TokenService:
             )
             raise TokenServiceError(f"Token refresh check failed: {e}", user_id=user_id) from e
 
-    def force_refresh_token(self, user_id: str, provider: str = "google") -> OAuthToken | None:
+    async def force_refresh_token(self, user_id: str, provider: str = "google") -> OAuthToken | None:
         """
         Force token refresh regardless of expiration status.
 
@@ -310,7 +307,7 @@ class TokenService:
             TokenServiceError: If refresh fails due to system errors
         """
         try:
-            current_tokens = self.get_tokens(user_id, provider)
+            current_tokens = await self.get_tokens(user_id, provider)
             if not current_tokens:
                 logger.warning(
                     "No tokens found for forced refresh", user_id=user_id, provider=provider
@@ -318,7 +315,7 @@ class TokenService:
                 return None
 
             logger.info("Forcing token refresh", user_id=user_id, provider=provider)
-            return self._perform_token_refresh(user_id, current_tokens, provider)
+            return await self._perform_token_refresh(user_id, current_tokens, provider)
 
         except TokenServiceError:
             raise
@@ -332,7 +329,7 @@ class TokenService:
             )
             raise TokenServiceError(f"Forced token refresh failed: {e}", user_id=user_id) from e
 
-    def _perform_token_refresh(
+    async def _perform_token_refresh(
         self, user_id: str, current_tokens: OAuthToken, provider: str
     ) -> OAuthToken | None:
         """
@@ -361,18 +358,18 @@ class TokenService:
                 )
 
             # Update refresh attempt tracking
-            self._update_refresh_attempt(user_id, provider)
+            await self._update_refresh_attempt(user_id, provider)
 
             # Call Google OAuth service to refresh
             new_token_response = refresh_google_token(current_tokens.refresh_token)
 
             # Store new tokens
-            success = self.store_tokens(user_id, new_token_response, provider)
+            success = await self.store_tokens(user_id, new_token_response, provider)
             if not success:
                 raise TokenServiceError("Failed to store refreshed tokens", user_id=user_id)
 
             # Get updated tokens
-            refreshed_tokens = self.get_tokens(user_id, provider)
+            refreshed_tokens = await self.get_tokens(user_id, provider)
 
             logger.info(
                 "Token refresh successful",
@@ -397,16 +394,16 @@ class TokenService:
             )
 
             # Update failure count
-            self._update_refresh_failure(user_id, provider)
+            await self._update_refresh_failure(user_id, provider)
 
             # Check if we should invalidate tokens
-            if self._should_invalidate_tokens(user_id, provider):
+            if await self._should_invalidate_tokens(user_id, provider):
                 logger.warning(
                     "Too many refresh failures - invalidating tokens",
                     user_id=user_id,
                     provider=provider,
                 )
-                self.delete_tokens(user_id, provider)
+                await self.delete_tokens(user_id, provider)
 
             raise TokenServiceError(
                 f"Token refresh failed: {e}", user_id=user_id, recoverable=False
@@ -422,10 +419,11 @@ class TokenService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            self._update_refresh_failure(user_id, provider)
+            await self._update_refresh_failure(user_id, provider)
             raise TokenServiceError(f"Token refresh failed: {e}", user_id=user_id) from e
 
-    def delete_tokens(self, user_id: str, provider: str = "google") -> bool:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def delete_tokens(self, user_id: str, provider: str = "google") -> bool:
         """
         Delete OAuth tokens for user (for disconnection or cleanup).
 
@@ -439,12 +437,10 @@ class TokenService:
         try:
             query = "DELETE FROM oauth_tokens WHERE user_id = %s AND provider = %s"
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id, provider))
-                    deleted_count = cur.rowcount
+            # Use database pool helper function
+            affected_rows = await execute_query(query, (user_id, provider))
 
-            success = deleted_count > 0
+            success = affected_rows > 0
 
             if success:
                 logger.info("OAuth tokens deleted successfully", user_id=user_id, provider=provider)
@@ -453,13 +449,12 @@ class TokenService:
 
             return success
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error deleting tokens",
                 user_id=user_id,
                 provider=provider,
                 error=str(e),
-                error_type=type(e).__name__,
             )
             return False
         except Exception as e:
@@ -472,7 +467,7 @@ class TokenService:
             )
             return False
 
-    def revoke_and_delete_tokens(self, user_id: str, provider: str = "google") -> bool:
+    async def revoke_and_delete_tokens(self, user_id: str, provider: str = "google") -> bool:
         """
         Revoke tokens with provider and delete from database.
 
@@ -485,7 +480,7 @@ class TokenService:
         """
         try:
             # Get tokens for revocation
-            tokens = self.get_tokens(user_id, provider)
+            tokens = await self.get_tokens(user_id, provider)
             if not tokens:
                 logger.debug("No tokens found to revoke", user_id=user_id, provider=provider)
                 return True  # Nothing to revoke is considered success
@@ -502,7 +497,7 @@ class TokenService:
                     )
 
             # Delete from database regardless of revocation result
-            delete_success = self.delete_tokens(user_id, provider)
+            delete_success = await self.delete_tokens(user_id, provider)
 
             overall_success = delete_success  # Database deletion is more critical
 
@@ -527,7 +522,8 @@ class TokenService:
             )
             return False
 
-    def get_tokens_expiring_soon(
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def get_tokens_expiring_soon(
         self, provider: str = "google", buffer_minutes: int = TOKEN_REFRESH_BUFFER_MINUTES
     ) -> list[str]:
         """
@@ -542,7 +538,6 @@ class TokenService:
         """
         try:
             # FIXED: Use timezone-aware datetime
-
             buffer_time = datetime.now(UTC) + timedelta(minutes=buffer_minutes)
 
             query = """
@@ -556,20 +551,18 @@ class TokenService:
             LIMIT %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        query,
-                        (
-                            provider,
-                            buffer_time,
-                            REFRESH_FAILURE_THRESHOLD,
-                            TOKEN_CLEANUP_BATCH_SIZE,
-                        ),
-                    )
-                    rows = cur.fetchall()
+            # Use database pool helper function
+            rows = await fetch_all(
+                query,
+                (
+                    provider,
+                    buffer_time,
+                    REFRESH_FAILURE_THRESHOLD,
+                    TOKEN_CLEANUP_BATCH_SIZE,
+                ),
+            )
 
-            user_ids = [row[0] for row in rows]
+            user_ids = [str(list(row.values())[0]) for row in rows]
 
             logger.debug(
                 "Found tokens expiring soon",
@@ -580,12 +573,11 @@ class TokenService:
 
             return user_ids
 
-        except psycopg.Error as e:
+        except DatabaseError as e:
             logger.error(
                 "Database error finding expiring tokens",
                 provider=provider,
                 error=str(e),
-                error_type=type(e).__name__,
             )
             return []
         except Exception as e:
@@ -597,7 +589,8 @@ class TokenService:
             )
             return []
 
-    def _update_refresh_attempt(self, user_id: str, provider: str) -> None:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _update_refresh_attempt(self, user_id: str, provider: str) -> None:
         """Update last refresh attempt timestamp."""
         try:
             query = """
@@ -606,9 +599,7 @@ class TokenService:
             WHERE user_id = %s AND provider = %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id, provider))
+            await execute_query(query, (user_id, provider))
 
         except Exception as e:
             logger.warning(
@@ -618,7 +609,8 @@ class TokenService:
                 error=str(e),
             )
 
-    def _update_refresh_failure(self, user_id: str, provider: str) -> None:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _update_refresh_failure(self, user_id: str, provider: str) -> None:
         """Increment refresh failure count."""
         try:
             query = """
@@ -628,9 +620,7 @@ class TokenService:
             WHERE user_id = %s AND provider = %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id, provider))
+            await execute_query(query, (user_id, provider))
 
         except Exception as e:
             logger.warning(
@@ -640,7 +630,8 @@ class TokenService:
                 error=str(e),
             )
 
-    def _should_invalidate_tokens(self, user_id: str, provider: str) -> bool:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _should_invalidate_tokens(self, user_id: str, provider: str) -> bool:
         """Check if tokens should be invalidated due to repeated failures."""
         try:
             query = """
@@ -649,13 +640,12 @@ class TokenService:
             WHERE user_id = %s AND provider = %s
             """
 
-            with psycopg.connect(self.db_url, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (user_id, provider))
-                    row = cur.fetchone()
+            row = await fetch_one(query, (user_id, provider))
 
-                    if row and row[0]:
-                        return row[0] >= REFRESH_FAILURE_THRESHOLD
+            if row:
+                failure_count = list(row.values())[0]
+                if failure_count:
+                    return failure_count >= REFRESH_FAILURE_THRESHOLD
 
             return False
 
@@ -668,7 +658,8 @@ class TokenService:
             )
             return False
 
-    def health_check(self) -> dict[str, any]:
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def health_check(self) -> dict[str, any]:
         """
         Check token service health.
 
@@ -685,12 +676,14 @@ class TokenService:
 
             # Test database connectivity
             try:
-                with psycopg.connect(self.db_url, autocommit=True) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT COUNT(*) FROM oauth_tokens")
-                        count = cur.fetchone()[0]
-                        health_data["database_connectivity"] = "ok"
-                        health_data["total_tokens"] = count
+                row = await fetch_one("SELECT COUNT(*) FROM oauth_tokens")
+                if row:
+                    count = list(row.values())[0]
+                    health_data["database_connectivity"] = "ok"
+                    health_data["total_tokens"] = count
+                else:
+                    health_data["database_connectivity"] = "error: no result"
+                    health_data["healthy"] = False
             except Exception as e:
                 health_data["database_connectivity"] = f"error: {str(e)}"
                 health_data["healthy"] = False
@@ -724,26 +717,26 @@ token_service = TokenService()
 
 
 # Convenience functions for easy import
-def store_oauth_tokens(user_id: str, token_response: TokenResponse) -> bool:
+async def store_oauth_tokens(user_id: str, token_response: TokenResponse) -> bool:
     """Store OAuth tokens for user."""
-    return token_service.store_tokens(user_id, token_response)
+    return await token_service.store_tokens(user_id, token_response)
 
 
-def get_oauth_tokens(user_id: str) -> OAuthToken | None:
+async def get_oauth_tokens(user_id: str) -> OAuthToken | None:
     """Get OAuth tokens for user."""
-    return token_service.get_tokens(user_id)
+    return await token_service.get_tokens(user_id)
 
 
-def refresh_oauth_tokens(user_id: str) -> OAuthToken | None:
+async def refresh_oauth_tokens(user_id: str) -> OAuthToken | None:
     """Refresh OAuth tokens if needed."""
-    return token_service.refresh_token_if_needed(user_id)
+    return await token_service.refresh_token_if_needed(user_id)
 
 
-def revoke_oauth_tokens(user_id: str) -> bool:
+async def revoke_oauth_tokens(user_id: str) -> bool:
     """Revoke and delete OAuth tokens."""
-    return token_service.revoke_and_delete_tokens(user_id)
+    return await token_service.revoke_and_delete_tokens(user_id)
 
 
-def token_service_health() -> dict[str, any]:
+async def token_service_health() -> dict[str, any]:
     """Check token service health."""
-    return token_service.health_check()
+    return await token_service.health_check()
