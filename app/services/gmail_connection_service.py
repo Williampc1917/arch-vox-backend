@@ -4,8 +4,8 @@ Coordinates OAuth flow, user status updates, and connection management.
 REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
+import asyncio
 from datetime import datetime
-
 from app.db.helpers import DatabaseError, execute_query, fetch_one, fetch_all, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
@@ -158,7 +158,7 @@ class GmailConnectionService:
             )
             raise GmailConnectionError(f"OAuth initiation failed: {e}", user_id=user_id) from e
 
-    def complete_oauth_flow(self, user_id: str, authorization_code: str, state: str) -> bool:
+    async def complete_oauth_flow(self, user_id: str, authorization_code: str, state: str) -> bool:
         """
         Complete OAuth flow and establish Gmail connection.
 
@@ -209,7 +209,10 @@ class GmailConnectionService:
                 )
 
             # Update user Gmail connection status
-            self._update_user_gmail_status(user_id, connected=True)
+            await self._update_user_gmail_status(user_id, connected=True)
+
+            # Check if Calendar permissions were also granted and update status
+            await self._update_calendar_status_if_granted(user_id, token_response.scope)
 
             logger.info(
                 "Gmail OAuth flow completed successfully",
@@ -255,7 +258,7 @@ class GmailConnectionService:
             )
             raise GmailConnectionError(f"OAuth completion failed: {e}", user_id=user_id) from e
 
-    def get_connection_status(self, user_id: str) -> GmailConnectionStatus:
+    async def get_connection_status(self, user_id: str) -> GmailConnectionStatus:
         """
         Get comprehensive Gmail connection status for user.
 
@@ -271,7 +274,7 @@ class GmailConnectionService:
             logger.debug("Getting Gmail connection status", user_id=user_id)
 
             # Check database for user Gmail status
-            user_connected = self._get_user_gmail_status(user_id)
+            user_connected = await self._get_user_gmail_status(user_id)
 
             if not user_connected:
                 return GmailConnectionStatus(
@@ -287,7 +290,7 @@ class GmailConnectionService:
                     "User marked as Gmail connected but no tokens found", user_id=user_id
                 )
                 # Fix inconsistent state
-                self._update_user_gmail_status(user_id, connected=False)
+                await self._update_user_gmail_status(user_id, connected=False)
 
                 return GmailConnectionStatus(
                     connected=False, user_id=user_id, connection_health="token_missing"
@@ -318,7 +321,7 @@ class GmailConnectionService:
                 connected=False, user_id=user_id, connection_health="error"
             )
 
-    def disconnect_gmail(self, user_id: str) -> bool:
+    async def disconnect_gmail(self, user_id: str) -> bool:
         """
         Disconnect Gmail and revoke all tokens.
 
@@ -338,10 +341,10 @@ class GmailConnectionService:
 
             # Update user status regardless of revocation result
             # (local disconnection should succeed even if remote revocation fails)
-            self._update_user_gmail_status(user_id, connected=False)
+            await self._update_user_gmail_status(user_id, connected=False)
 
             # Update onboarding step if user was in Gmail step
-            self._handle_disconnect_onboarding_update(user_id)
+            await self._handle_disconnect_onboarding_update(user_id)
 
             logger.info(
                 "Gmail disconnection completed", user_id=user_id, revoke_success=revoke_success
@@ -358,7 +361,7 @@ class GmailConnectionService:
             )
             return False
 
-    def refresh_connection(self, user_id: str) -> bool:
+    async def refresh_connection(self, user_id: str) -> bool:
         """
         Refresh Gmail connection tokens.
 
@@ -397,7 +400,7 @@ class GmailConnectionService:
                 )
 
                 # Update user status to disconnected
-                self._update_user_gmail_status(user_id, connected=False)
+                await self._update_user_gmail_status(user_id, connected=False)
 
                 raise GmailConnectionError(
                     "Gmail connection refresh failed - re-authentication required",
@@ -412,7 +415,7 @@ class GmailConnectionService:
 
             # Update user status if refresh failed permanently
             if not getattr(e, "recoverable", True):
-                self._update_user_gmail_status(user_id, connected=False)
+                await self._update_user_gmail_status(user_id, connected=False)
 
             raise GmailConnectionError(
                 f"Connection refresh failed: {e}", user_id=user_id, error_code="refresh_failed"
@@ -594,6 +597,44 @@ class GmailConnectionService:
             # Don't raise exception for onboarding updates - they're not critical
             logger.debug("Onboarding update failure is non-critical", user_id=user_id)
 
+    async def _update_calendar_status_if_granted(self, user_id: str, scope: str) -> None:
+        """
+        Check if Calendar permissions were granted and update user status accordingly.
+        
+        Args:
+            user_id: UUID string of the user
+            scope: OAuth scope string from token response
+        """
+        try:
+            # Check if scope contains calendar permissions
+            calendar_indicators = ["calendar.readonly", "calendar.events", "calendar"]
+            has_calendar_access = any(indicator in scope for indicator in calendar_indicators)
+            
+            if has_calendar_access:
+                # Import and call the calendar status update function
+                from app.services.calendar_connection_service import _update_user_calendar_status
+                await _update_user_calendar_status(user_id, connected=True)
+                
+                logger.info(
+                    "Calendar permissions detected and status updated",
+                    user_id=user_id,
+                    scope_preview=scope[:50] + "..." if len(scope) > 50 else scope,
+                )
+            else:
+                logger.debug(
+                    "No calendar permissions detected in OAuth scope",
+                    user_id=user_id,
+                    scope_preview=scope[:50] + "..." if len(scope) > 50 else scope,
+                )
+                
+        except Exception as e:
+            logger.error(
+                "Error updating calendar status after OAuth completion",
+                user_id=user_id,
+                error=str(e),
+            )
+            # Don't raise exception - Calendar is optional, Gmail is required
+
     def _assess_connection_health(self, tokens: OAuthToken) -> str:
         """Assess the health of the Gmail connection."""
         try:
@@ -659,10 +700,10 @@ class GmailConnectionService:
 
         except DatabaseError as e:
             logger.error("Database error getting connection metrics", error=str(e))
-            raise GmailConnectionError(f"Database error getting metrics: {e}", operation="get_metrics") from e
+            raise GmailConnectionError(f"Database error getting metrics: {e}") from e
         except Exception as e:
             logger.error("Error getting connection metrics", error=str(e))
-            raise GmailConnectionError(f"Failed to get connection metrics: {e}", operation="get_metrics") from e
+            raise GmailConnectionError(f"Failed to get connection metrics: {e}") from e
 
     def health_check(self) -> dict[str, any]:
         """
@@ -678,9 +719,9 @@ class GmailConnectionService:
                 "database_connectivity": "unknown",
             }
 
-            # Test database connectivity
+            # Test database connectivity - FIX: Use asyncio.run for async method
             try:
-                metrics = self.get_connection_metrics()
+                metrics = asyncio.run(self.get_connection_metrics())
                 if metrics.get("healthy", False):
                     health_data["database_connectivity"] = "ok"
                     health_data.update(metrics)
@@ -691,15 +732,45 @@ class GmailConnectionService:
                 health_data["database_connectivity"] = f"error: {str(e)}"
                 health_data["healthy"] = False
 
-            # Test dependent services
+            # Test dependent services - simpler approach without event loop conflicts
             try:
                 from app.services.google_oauth_service import google_oauth_health
                 from app.services.oauth_state_service import oauth_state_health
                 from app.services.token_service import token_service_health
 
-                health_data["oauth_state_service"] = oauth_state_health()["healthy"]
-                health_data["google_oauth_service"] = google_oauth_health()["healthy"]
-                health_data["token_service"] = token_service_health()["healthy"]
+                # Call async health checks individually to avoid event loop conflicts
+                try:
+                    oauth_state_result = asyncio.run(oauth_state_health())
+                    if isinstance(oauth_state_result, dict):
+                        health_data["oauth_state_service"] = oauth_state_result.get("healthy", False)
+                    else:
+                        health_data["oauth_state_service"] = False
+                        health_data["oauth_state_error"] = f"Unexpected result type: {type(oauth_state_result)}"
+                except Exception as e:
+                    health_data["oauth_state_service"] = False
+                    health_data["oauth_state_error"] = str(e)
+
+                try:
+                    token_service_result = asyncio.run(token_service_health())
+                    if isinstance(token_service_result, dict):
+                        health_data["token_service"] = token_service_result.get("healthy", False)
+                    else:
+                        health_data["token_service"] = False
+                        health_data["token_service_error"] = f"Unexpected result type: {type(token_service_result)}"
+                except Exception as e:
+                    health_data["token_service"] = False
+                    health_data["token_service_error"] = str(e)
+                
+                # Sync health check
+                try:
+                    google_oauth_result = google_oauth_health()
+                    if isinstance(google_oauth_result, dict):
+                        health_data["google_oauth_service"] = google_oauth_result.get("healthy", False)
+                    else:
+                        health_data["google_oauth_service"] = False
+                except Exception as e:
+                    health_data["google_oauth_service"] = False
+                    health_data["google_oauth_error"] = str(e)
 
                 # Overall health depends on all services
                 if not all(
@@ -736,24 +807,24 @@ def start_gmail_oauth(user_id: str) -> tuple[str, str]:
     return gmail_connection_service.initiate_oauth_flow(user_id)
 
 
-def complete_gmail_oauth(user_id: str, code: str, state: str) -> bool:
+async def complete_gmail_oauth(user_id: str, code: str, state: str) -> bool:
     """Complete Gmail OAuth flow."""
-    return gmail_connection_service.complete_oauth_flow(user_id, code, state)
+    return await gmail_connection_service.complete_oauth_flow(user_id, code, state)
 
 
-def get_gmail_status(user_id: str) -> GmailConnectionStatus:
+async def get_gmail_status(user_id: str) -> GmailConnectionStatus:
     """Get Gmail connection status."""
-    return gmail_connection_service.get_connection_status(user_id)
+    return await gmail_connection_service.get_connection_status(user_id)
 
 
-def disconnect_gmail(user_id: str) -> bool:
+async def disconnect_gmail(user_id: str) -> bool:
     """Disconnect Gmail."""
-    return gmail_connection_service.disconnect_gmail(user_id)
+    return await gmail_connection_service.disconnect_gmail(user_id)
 
 
-def refresh_gmail_connection(user_id: str) -> bool:
+async def refresh_gmail_connection(user_id: str) -> bool:
     """Refresh Gmail connection."""
-    return gmail_connection_service.refresh_connection(user_id)
+    return await gmail_connection_service.refresh_connection(user_id)
 
 
 def gmail_connection_health() -> dict[str, any]:

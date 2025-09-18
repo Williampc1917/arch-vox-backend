@@ -136,7 +136,7 @@ async def oauth_callback(
         )
 
         # Complete OAuth flow
-        success = complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
+        success = await complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
 
         if success:
             response = GmailAuthCallbackResponse(
@@ -227,7 +227,7 @@ async def get_connection_status(claims: dict = Depends(auth_dependency)):
         logger.debug("Getting Gmail connection status", user_id=user_id)
 
         # Get comprehensive connection status
-        status_info = get_gmail_status(user_id)
+        status_info = await get_gmail_status(user_id)
 
         response = GmailAuthStatusResponse(
             connected=status_info.connected,
@@ -286,7 +286,7 @@ async def disconnect_gmail_account(claims: dict = Depends(auth_dependency)):
         logger.info("Disconnecting Gmail account", user_id=user_id)
 
         # Disconnect Gmail and revoke tokens
-        success = disconnect_gmail(user_id)
+        success = await disconnect_gmail(user_id)
 
         if success:
             logger.info("Gmail account disconnected successfully", user_id=user_id)
@@ -346,11 +346,11 @@ async def refresh_connection(claims: dict = Depends(auth_dependency)):
         logger.info("Manually refreshing Gmail connection", user_id=user_id)
 
         # Attempt to refresh the connection
-        success = refresh_gmail_connection(user_id)
+        success = await refresh_gmail_connection(user_id)
 
         if success:
             # Get updated status after refresh
-            updated_status = get_gmail_status(user_id)
+            updated_status = await get_gmail_status(user_id)
 
             logger.info("Gmail connection refreshed successfully", user_id=user_id)
 
@@ -410,7 +410,7 @@ async def refresh_connection(claims: dict = Depends(auth_dependency)):
 
 # Health check endpoint for Gmail auth system
 @router.get("/health")
-async def gmail_auth_health():
+def gmail_auth_health():
     """
     Health check for Gmail authentication system.
 

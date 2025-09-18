@@ -665,7 +665,7 @@ class CalendarConnectionService:
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-    def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> Dict[str, Any]:
         """
         Check calendar connection service health.
 
@@ -693,7 +693,7 @@ class CalendarConnectionService:
             # Test calendar API service health
             try:
                 from app.services.google_calendar_service import google_calendar_health
-                calendar_health = google_calendar_health()
+                calendar_health = google_calendar_health()  # Remove await since it's not async
                 health_data["calendar_api_connectivity"] = "ok" if calendar_health.get("healthy", False) else "error"
                 if not calendar_health.get("healthy", False):
                     health_data["healthy"] = False
@@ -719,6 +719,7 @@ class CalendarConnectionService:
                 "healthy": False,
                 "service": "calendar_connection",
                 "error": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
             }
 
 
@@ -761,12 +762,12 @@ async def create_user_event(
     )
 
 
-def calendar_connection_health() -> Dict[str, Any]:
+async def calendar_connection_health() -> Dict[str, Any]:
     """Check calendar connection service health."""
-    return calendar_connection_service.health_check()
+    return await calendar_connection_service.health_check()
 
 @with_db_retry(max_retries=3, base_delay=0.1)
-async def _update_user_calendar_status(self, user_id: str, connected: bool) -> bool:
+async def _update_user_calendar_status(user_id: str, connected: bool) -> bool:
     """Update only the calendar connection flag."""
     try:
         query = """

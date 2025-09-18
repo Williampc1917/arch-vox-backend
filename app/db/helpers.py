@@ -46,7 +46,7 @@ async def fetch_one(
                 row = await cur.fetchone()
                 return row if row else None
         else:
-            async with get_db_connection() as conn:
+            async with await get_db_connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(query, params)
                     row = await cur.fetchone()
@@ -78,7 +78,7 @@ async def fetch_all(
                 rows = await cur.fetchall()
                 return rows
         else:
-            async with get_db_connection() as conn:
+            async with await get_db_connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(query, params)
                     rows = await cur.fetchall()
@@ -110,7 +110,7 @@ async def fetch_val(
                 row = await cur.fetchone()
                 return list(row.values())[0] if row else None
         else:
-            async with get_db_connection() as conn:
+            async with await get_db_connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(query, params)
                     row = await cur.fetchone()
@@ -140,7 +140,7 @@ async def execute_query(
             cursor = await connection.execute(query, *params)
             return cursor.rowcount
         else:
-            async with get_db_connection() as conn:
+            async with await get_db_connection() as conn:
                 cursor = await conn.execute(query, *params)
                 return cursor.rowcount
 

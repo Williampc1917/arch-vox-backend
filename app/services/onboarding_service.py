@@ -188,13 +188,16 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
             await _fix_gmail_connection_state(user_id)
             raise OnboardingServiceError("Gmail connection invalid", user_id=user_id)
 
+        # Check Calendar permissions from OAuth tokens
+        calendar_connected = await _check_calendar_permissions(user_id)
+
         # All prerequisites met - proceed with completion
         query = """
         UPDATE users
         SET
             onboarding_completed = true,
             onboarding_step = 'completed',
-            calendar_connected = true,  -- ADD THIS LINE
+            calendar_connected = %s,  -- Set based on actual OAuth permissions
             updated_at = NOW()
         WHERE
             id = %s
@@ -204,7 +207,7 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         """
 
         # Use database pool helper function
-        affected_rows = await execute_query(query, (user_id,))
+        affected_rows = await execute_query(query, (calendar_connected, user_id))
 
         # Check if any rows were updated
         if affected_rows == 0:
@@ -219,6 +222,7 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
             user_id=user_id,
             step_transition="gmail → completed",
             gmail_connected=True,
+            calendar_connected=calendar_connected,
         )
 
         # Return updated user profile (domain model)
@@ -300,6 +304,48 @@ async def _fix_gmail_connection_state(user_id: str) -> None:
     except Exception as e:
         logger.error("Error fixing Gmail connection state", user_id=user_id, error=str(e))
         raise OnboardingServiceError(f"Failed to fix Gmail connection state: {e}", user_id=user_id) from e
+
+
+@with_db_retry(max_retries=3, base_delay=0.1)
+async def _check_calendar_permissions(user_id: str) -> bool:
+    """
+    Check if user has Calendar permissions from OAuth tokens.
+
+    Args:
+        user_id: UUID string of the user
+
+    Returns:
+        bool: True if Calendar permissions exist, False otherwise
+
+    Raises:
+        OnboardingServiceError: If check fails due to system errors
+    """
+    try:
+        # Get OAuth tokens for the user
+        from app.services.token_service import get_oauth_tokens
+        
+        oauth_tokens = await get_oauth_tokens(user_id, "google")
+        if not oauth_tokens:
+            logger.debug("No OAuth tokens found for calendar permission check", user_id=user_id)
+            return False
+
+        # Check if tokens have calendar access
+        has_calendar_access = oauth_tokens.has_calendar_access()
+        
+        logger.debug(
+            "Calendar permission check completed",
+            user_id=user_id,
+            has_calendar_access=has_calendar_access,
+            scope_preview=oauth_tokens.scope[:50] + "..." if oauth_tokens.scope else None,
+        )
+
+        return has_calendar_access
+
+    except Exception as e:
+        logger.error("Error checking calendar permissions", user_id=user_id, error=str(e))
+        # Don't raise exception - just return False to allow onboarding completion
+        # Calendar is optional, Gmail is required
+        return False
 
 
 async def get_onboarding_completion_requirements(user_id: str) -> dict:

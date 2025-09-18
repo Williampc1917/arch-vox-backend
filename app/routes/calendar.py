@@ -200,7 +200,7 @@ async def create_event(
 async def calendar_health_check():
     """Health check for calendar system."""
     try:
-        health = calendar_connection_health()
+        health = await calendar_connection_health()
         return health
     except Exception as e:
         logger.error("Calendar health check failed", error=str(e))
