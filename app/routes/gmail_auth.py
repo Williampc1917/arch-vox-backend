@@ -14,7 +14,7 @@ from app.models.api.oauth_response import (
     GmailAuthStatusResponse,
     GmailAuthURLResponse,
 )
-from app.services.gmail_connection_service import (
+from app.services.gmail_auth_service import (
     GmailConnectionError,
     complete_gmail_oauth,
     disconnect_gmail,
@@ -136,7 +136,9 @@ async def oauth_callback(
         )
 
         # Complete OAuth flow
-        success = await complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
+        success = await complete_gmail_oauth(
+            user_id=user_id, code=request.code, state=request.state
+        )
 
         if success:
             response = GmailAuthCallbackResponse(
@@ -421,7 +423,7 @@ def gmail_auth_health():
         dict: Health status of Gmail auth components
     """
     try:
-        from app.services.gmail_connection_service import gmail_connection_health
+        from app.services.gmail_auth_service import gmail_connection_health
 
         health_status = gmail_connection_health()
 
@@ -478,7 +480,7 @@ async def get_connection_metrics(claims: dict = Depends(auth_dependency)):
         )
 
     try:
-        from app.services.gmail_connection_service import gmail_connection_service
+        from app.services.gmail_auth_service import gmail_connection_service
 
         metrics = gmail_connection_service.get_connection_metrics()
 

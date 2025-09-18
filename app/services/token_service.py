@@ -244,7 +244,9 @@ class TokenService:
             )
             raise TokenServiceError(f"Token retrieval failed: {e}", user_id=user_id) from e
 
-    async def refresh_token_if_needed(self, user_id: str, provider: str = "google") -> OAuthToken | None:
+    async def refresh_token_if_needed(
+        self, user_id: str, provider: str = "google"
+    ) -> OAuthToken | None:
         """
         Check token expiration and refresh if needed (on-demand refresh).
 
@@ -292,7 +294,9 @@ class TokenService:
             )
             raise TokenServiceError(f"Token refresh check failed: {e}", user_id=user_id) from e
 
-    async def force_refresh_token(self, user_id: str, provider: str = "google") -> OAuthToken | None:
+    async def force_refresh_token(
+        self, user_id: str, provider: str = "google"
+    ) -> OAuthToken | None:
         """
         Force token refresh regardless of expiration status.
 

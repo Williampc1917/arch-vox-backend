@@ -1,17 +1,19 @@
 """
 Google Calendar API Service for calendar operations and event management.
 Handles Calendar API client initialization, CRUD operations, and timezone management.
+UPDATED: Now uses domain models from app.models.domain.calendar_domain
 """
 
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.infrastructure.observability.logging import get_logger
+from app.models.domain.calendar_domain import CalendarEvent, CalendarInfo
 
 logger = get_logger(__name__)
 
@@ -39,118 +41,6 @@ class GoogleCalendarError(Exception):
         self.error_code = error_code
         self.status_code = status_code
         self.response_data = response_data or {}
-
-
-class CalendarEvent:
-    """Structured representation of a calendar event."""
-
-    def __init__(self, data: dict):
-        self.id = data.get("id")
-        self.summary = data.get("summary", "")
-        self.description = data.get("description", "")
-        self.start_time = self._parse_datetime(data.get("start", {}))
-        self.end_time = self._parse_datetime(data.get("end", {}))
-        self.timezone = data.get("start", {}).get("timeZone", "UTC")
-        self.status = data.get("status", "confirmed")
-        self.attendees = data.get("attendees", [])
-        self.location = data.get("location", "")
-        self.created = self._parse_datetime_iso(data.get("created"))
-        self.updated = self._parse_datetime_iso(data.get("updated"))
-        self.raw_data = data
-
-    def _parse_datetime(self, dt_data: dict) -> datetime | None:
-        """Parse datetime from Google Calendar format."""
-        if not dt_data:
-            return None
-
-        # Handle all-day events (date only)
-        if "date" in dt_data:
-            date_str = dt_data["date"]
-            return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
-        # Handle timed events (dateTime)
-        if "dateTime" in dt_data:
-            dt_str = dt_data["dateTime"]
-            try:
-                return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-            except ValueError:
-                logger.warning("Failed to parse datetime", datetime_str=dt_str)
-                return None
-
-        return None
-
-    def _parse_datetime_iso(self, dt_str: str | None) -> datetime | None:
-        """Parse ISO datetime string."""
-        if not dt_str:
-            return None
-        try:
-            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        except ValueError:
-            logger.warning("Failed to parse ISO datetime", datetime_str=dt_str)
-            return None
-
-    def is_all_day(self) -> bool:
-        """Check if this is an all-day event."""
-        return "date" in self.raw_data.get("start", {})
-
-    def is_busy(self) -> bool:
-        """Check if this event shows as busy (blocks availability)."""
-        transparency = self.raw_data.get("transparency", "opaque")
-        return transparency == "opaque" and self.status == "confirmed"
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for API responses."""
-        return {
-            "id": self.id,
-            "summary": self.summary,
-            "description": self.description,
-            "start_time": self.start_time.isoformat() if self.start_time else None,
-            "end_time": self.end_time.isoformat() if self.end_time else None,
-            "timezone": self.timezone,
-            "status": self.status,
-            "location": self.location,
-            "is_all_day": self.is_all_day(),
-            "is_busy": self.is_busy(),
-            "attendees_count": len(self.attendees),
-            "created": self.created.isoformat() if self.created else None,
-            "updated": self.updated.isoformat() if self.updated else None,
-        }
-
-
-class CalendarInfo:
-    """Structured representation of calendar metadata."""
-
-    def __init__(self, data: dict):
-        self.id = data.get("id")
-        self.summary = data.get("summary", "")
-        self.description = data.get("description", "")
-        self.timezone = data.get("timeZone", "UTC")
-        self.access_role = data.get("accessRole", "reader")
-        self.primary = data.get("primary", False)
-        self.selected = data.get("selected", True)
-        self.color_id = data.get("colorId")
-        self.background_color = data.get("backgroundColor")
-        self.foreground_color = data.get("foregroundColor")
-
-    def can_create_events(self) -> bool:
-        """Check if we can create events in this calendar."""
-        return self.access_role in ["owner", "writer"]
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for API responses."""
-        return {
-            "id": self.id,
-            "summary": self.summary,
-            "description": self.description,
-            "timezone": self.timezone,
-            "access_role": self.access_role,
-            "primary": self.primary,
-            "selected": self.selected,
-            "can_create_events": self.can_create_events(),
-            "color_id": self.color_id,
-            "background_color": self.background_color,
-            "foreground_color": self.foreground_color,
-        }
 
 
 class GoogleCalendarService:
@@ -221,10 +111,10 @@ class GoogleCalendarService:
         try:
             error_data = response.json() if response.text else {}
             error_info = error_data.get("error", {})
-            
+
             error_code = error_info.get("code", "unknown")
             error_message = error_info.get("message", "Unknown Calendar API error")
-            
+
             logger.error(
                 f"Calendar API {operation} failed",
                 status_code=response.status_code,
@@ -267,7 +157,7 @@ class GoogleCalendarService:
 
         return error_mappings.get(error_code, f"Calendar error: {error_message}")
 
-    async def list_calendars(self, access_token: str) -> List[CalendarInfo]:
+    async def list_calendars(self, access_token: str) -> list[CalendarInfo]:
         """
         List all calendars accessible to the user.
 
@@ -289,6 +179,7 @@ class GoogleCalendarService:
             response = self._session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             data = self._handle_api_response(response, "list_calendars")
 
+            # Convert to domain models
             calendars = []
             for item in data.get("items", []):
                 calendar_info = CalendarInfo(item)
@@ -303,7 +194,9 @@ class GoogleCalendarService:
             logger.error("Unexpected error listing calendars", error=str(e))
             raise GoogleCalendarError(f"Failed to list calendars: {e}") from e
 
-    async def get_calendar(self, access_token: str, calendar_id: str = CALENDAR_PRIMARY) -> CalendarInfo:
+    async def get_calendar(
+        self, access_token: str, calendar_id: str = CALENDAR_PRIMARY
+    ) -> CalendarInfo:
         """
         Get information about a specific calendar.
 
@@ -344,7 +237,7 @@ class GoogleCalendarService:
         time_max: datetime | None = None,
         max_results: int = 50,
         single_events: bool = True,
-    ) -> List[CalendarEvent]:
+    ) -> list[CalendarEvent]:
         """
         List events from a calendar.
 
@@ -377,7 +270,7 @@ class GoogleCalendarService:
                 params["timeMin"] = time_min.isoformat()
             else:
                 # Default to current time
-                params["timeMin"] = datetime.now(timezone.utc).isoformat()
+                params["timeMin"] = datetime.now(UTC).isoformat()
 
             if time_max:
                 params["timeMax"] = time_max.isoformat()
@@ -390,9 +283,12 @@ class GoogleCalendarService:
                 max_results=max_results,
             )
 
-            response = self._session.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+            response = self._session.get(
+                url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            )
             data = self._handle_api_response(response, "list_events")
 
+            # Convert to domain models
             events = []
             for item in data.get("items", []):
                 event = CalendarEvent(item)
@@ -457,7 +353,7 @@ class GoogleCalendarService:
         description: str = "",
         location: str = "",
         timezone_str: str = "UTC",
-        attendees: List[str] | None = None,
+        attendees: list[str] | None = None,
     ) -> CalendarEvent:
         """
         Create a new calendar event.
@@ -558,26 +454,26 @@ class GoogleCalendarService:
         try:
             # First get the existing event
             existing_event = await self.get_event(access_token, event_id, calendar_id)
-            
+
             url = f"{CALENDAR_API_BASE_URL}/calendars/{calendar_id}/events/{event_id}"
             headers = self._get_auth_headers(access_token)
 
             # Build update data (only include fields that are being updated)
             update_data = {}
-            
+
             if summary is not None:
                 update_data["summary"] = summary
             if description is not None:
                 update_data["description"] = description
             if location is not None:
                 update_data["location"] = location
-                
+
             if start_time is not None or timezone_str is not None:
                 update_data["start"] = {
                     "dateTime": (start_time or existing_event.start_time).isoformat(),
                     "timeZone": timezone_str or existing_event.timezone,
                 }
-                
+
             if end_time is not None or timezone_str is not None:
                 update_data["end"] = {
                     "dateTime": (end_time or existing_event.end_time).isoformat(),
@@ -650,8 +546,8 @@ class GoogleCalendarService:
         access_token: str,
         start_time: datetime,
         end_time: datetime,
-        calendar_ids: List[str] | None = None,
-    ) -> Dict[str, Any]:
+        calendar_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Check availability during a specific time period.
 
@@ -700,13 +596,13 @@ class GoogleCalendarService:
             for cal_id in calendar_ids:
                 calendar_busy = data.get("calendars", {}).get(cal_id, {})
                 busy_periods = calendar_busy.get("busy", [])
-                
+
                 calendars_status[cal_id] = {
                     "busy_periods": busy_periods,
                     "busy_count": len(busy_periods),
                     "errors": calendar_busy.get("errors", []),
                 }
-                
+
                 all_busy_periods.extend(busy_periods)
 
             # Determine overall availability
@@ -737,7 +633,7 @@ class GoogleCalendarService:
             logger.error("Unexpected error checking availability", error=str(e))
             raise GoogleCalendarError(f"Failed to check availability: {e}") from e
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """
         Check Google Calendar service health.
 
@@ -753,7 +649,7 @@ class GoogleCalendarService:
                 "max_retries": MAX_RETRIES,
                 "supported_operations": [
                     "list_calendars",
-                    "get_calendar", 
+                    "get_calendar",
                     "list_events",
                     "get_event",
                     "create_event",
@@ -768,7 +664,9 @@ class GoogleCalendarService:
                 # Simple HEAD request to check API availability
                 response = requests.head(CALENDAR_API_BASE_URL, timeout=5)
                 health_data["api_connectivity"] = (
-                    "ok" if response.status_code in [200, 401, 403] else f"error_{response.status_code}"
+                    "ok"
+                    if response.status_code in [200, 401, 403]
+                    else f"error_{response.status_code}"
                 )
             except requests.exceptions.RequestException as e:
                 health_data["api_connectivity"] = f"error_{type(e).__name__}"
@@ -790,7 +688,7 @@ google_calendar_service = GoogleCalendarService()
 
 
 # Convenience functions for easy import
-async def list_user_calendars(access_token: str) -> List[CalendarInfo]:
+async def list_user_calendars(access_token: str) -> list[CalendarInfo]:
     """List all calendars for user."""
     return await google_calendar_service.list_calendars(access_token)
 
@@ -801,7 +699,7 @@ async def get_calendar_events(
     time_min: datetime | None = None,
     time_max: datetime | None = None,
     max_results: int = 50,
-) -> List[CalendarEvent]:
+) -> list[CalendarEvent]:
     """Get events from calendar."""
     return await google_calendar_service.list_events(
         access_token, calendar_id, time_min, time_max, max_results
@@ -820,7 +718,14 @@ async def create_calendar_event(
 ) -> CalendarEvent:
     """Create new calendar event."""
     return await google_calendar_service.create_event(
-        access_token, summary, start_time, end_time, calendar_id, description, location, timezone_str
+        access_token,
+        summary,
+        start_time,
+        end_time,
+        calendar_id,
+        description,
+        location,
+        timezone_str,
     )
 
 
@@ -828,12 +733,14 @@ async def check_calendar_availability(
     access_token: str,
     start_time: datetime,
     end_time: datetime,
-    calendar_ids: List[str] | None = None,
-) -> Dict[str, Any]:
+    calendar_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Check availability in calendars."""
-    return await google_calendar_service.check_availability(access_token, start_time, end_time, calendar_ids)
+    return await google_calendar_service.check_availability(
+        access_token, start_time, end_time, calendar_ids
+    )
 
 
-def google_calendar_health() -> Dict[str, Any]:
+def google_calendar_health() -> dict[str, Any]:
     """Check Google Calendar service health."""
     return google_calendar_service.health_check()

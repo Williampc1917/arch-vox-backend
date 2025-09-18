@@ -120,7 +120,9 @@ async def update_profile_name(
 
     except DatabaseError as e:
         logger.error("Database error updating profile name", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Database error updating profile: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Database error updating profile: {e}", user_id=user_id
+        ) from e
     except Exception as e:
         logger.error("Unexpected error updating profile name", user_id=user_id, error=str(e))
         raise OnboardingServiceError(f"Profile update failed: {e}", user_id=user_id) from e
@@ -232,7 +234,9 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         raise  # Re-raise onboarding service errors
     except DatabaseError as e:
         logger.error("Database error completing onboarding", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Database error completing onboarding: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Database error completing onboarding: {e}", user_id=user_id
+        ) from e
     except Exception as e:
         logger.error("Unexpected error completing onboarding", user_id=user_id, error=str(e))
         raise OnboardingServiceError(f"Onboarding completion failed: {e}", user_id=user_id) from e
@@ -265,10 +269,14 @@ async def _validate_gmail_connection(user_id: str) -> bool:
 
     except DatabaseError as e:
         logger.error("Database error validating Gmail connection", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Database error validating Gmail connection: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Database error validating Gmail connection: {e}", user_id=user_id
+        ) from e
     except Exception as e:
         logger.error("Error validating Gmail connection", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Gmail connection validation failed: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Gmail connection validation failed: {e}", user_id=user_id
+        ) from e
 
 
 @with_db_retry(max_retries=3, base_delay=0.1)
@@ -300,10 +308,14 @@ async def _fix_gmail_connection_state(user_id: str) -> None:
 
     except DatabaseError as e:
         logger.error("Database error fixing Gmail connection state", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Database error fixing Gmail state: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Database error fixing Gmail state: {e}", user_id=user_id
+        ) from e
     except Exception as e:
         logger.error("Error fixing Gmail connection state", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(f"Failed to fix Gmail connection state: {e}", user_id=user_id) from e
+        raise OnboardingServiceError(
+            f"Failed to fix Gmail connection state: {e}", user_id=user_id
+        ) from e
 
 
 @with_db_retry(max_retries=3, base_delay=0.1)
@@ -323,7 +335,7 @@ async def _check_calendar_permissions(user_id: str) -> bool:
     try:
         # Get OAuth tokens for the user
         from app.services.token_service import get_oauth_tokens
-        
+
         oauth_tokens = await get_oauth_tokens(user_id, "google")
         if not oauth_tokens:
             logger.debug("No OAuth tokens found for calendar permission check", user_id=user_id)
@@ -331,7 +343,7 @@ async def _check_calendar_permissions(user_id: str) -> bool:
 
         # Check if tokens have calendar access
         has_calendar_access = oauth_tokens.has_calendar_access()
-        
+
         logger.debug(
             "Calendar permission check completed",
             user_id=user_id,

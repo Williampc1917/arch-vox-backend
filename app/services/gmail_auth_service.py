@@ -1,12 +1,14 @@
 """
-Gmail Connection Service for high-level OAuth orchestration.
+Gmail auth Service for high-level OAuth orchestration.
 Coordinates OAuth flow, user status updates, and connection management.
 REFACTORED: Now uses database connection pool instead of direct psycopg connections.
+takes care of gmail and calendar auth and connection status updates.
 """
 
 import asyncio
 from datetime import datetime
-from app.db.helpers import DatabaseError, execute_query, fetch_one, fetch_all, with_db_retry
+
+from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
 from app.services.google_oauth_service import (
@@ -33,7 +35,13 @@ logger = get_logger(__name__)
 class GmailConnectionError(Exception):
     """Custom exception for Gmail connection operations."""
 
-    def __init__(self, message: str, user_id: str | None = None, error_code: str | None = None, recoverable: bool = True):
+    def __init__(
+        self,
+        message: str,
+        user_id: str | None = None,
+        error_code: str | None = None,
+        recoverable: bool = True,
+    ):
         super().__init__(message)
         self.user_id = user_id
         self.error_code = error_code
@@ -91,10 +99,11 @@ class GmailConnectionService:
         """Validate service configuration when first used."""
         if self._config_validated:
             return
-            
+
         # Test database pool availability
         try:
             from app.db.pool import db_pool
+
             if not db_pool._initialized:
                 raise GmailConnectionError("Database pool not initialized")
         except Exception as e:
@@ -117,7 +126,7 @@ class GmailConnectionService:
             GmailConnectionError: If OAuth initiation fails
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.info("Initiating Gmail OAuth flow", user_id=user_id)
 
@@ -174,7 +183,7 @@ class GmailConnectionService:
             GmailConnectionError: If OAuth completion fails
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.info(
                 "Completing Gmail OAuth flow",
@@ -269,7 +278,7 @@ class GmailConnectionService:
             GmailConnectionStatus: Complete connection status information
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.debug("Getting Gmail connection status", user_id=user_id)
 
@@ -332,7 +341,7 @@ class GmailConnectionService:
             bool: True if disconnection successful
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.info("Disconnecting Gmail for user", user_id=user_id)
 
@@ -375,7 +384,7 @@ class GmailConnectionService:
             GmailConnectionError: If refresh fails due to system errors
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.info("Refreshing Gmail connection", user_id=user_id)
 
@@ -434,13 +443,13 @@ class GmailConnectionService:
     async def _get_user_gmail_status(self, user_id: str) -> bool:
         """
         Get Gmail connection status from users table.
-        
+
         Args:
             user_id: UUID string of the user
-            
+
         Returns:
             bool: True if user has Gmail connected, False otherwise
-            
+
         Raises:
             GmailConnectionError: If database operation fails
         """
@@ -463,7 +472,9 @@ class GmailConnectionService:
                 user_id=user_id,
                 error=str(e),
             )
-            raise GmailConnectionError(f"Database error getting Gmail status: {e}", user_id=user_id) from e
+            raise GmailConnectionError(
+                f"Database error getting Gmail status: {e}", user_id=user_id
+            ) from e
         except Exception as e:
             logger.error(
                 "Unexpected error getting user Gmail status",
@@ -477,14 +488,14 @@ class GmailConnectionService:
     async def _update_user_gmail_status(self, user_id: str, connected: bool) -> bool:
         """
         Update Gmail connection status in users table.
-        
+
         Args:
             user_id: UUID string of the user
             connected: Whether Gmail is connected or not
-            
+
         Returns:
             bool: True if update successful, False otherwise
-            
+
         Raises:
             GmailConnectionError: If database operation fails
         """
@@ -536,7 +547,9 @@ class GmailConnectionService:
                 connected=connected,
                 error=str(e),
             )
-            raise GmailConnectionError(f"Database error updating Gmail status: {e}", user_id=user_id) from e
+            raise GmailConnectionError(
+                f"Database error updating Gmail status: {e}", user_id=user_id
+            ) from e
         except Exception as e:
             logger.error(
                 "Unexpected error updating user Gmail status",
@@ -545,16 +558,18 @@ class GmailConnectionService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise GmailConnectionError(f"Failed to update Gmail status: {e}", user_id=user_id) from e
+            raise GmailConnectionError(
+                f"Failed to update Gmail status: {e}", user_id=user_id
+            ) from e
 
     @with_db_retry(max_retries=3, base_delay=0.1)
     async def _handle_disconnect_onboarding_update(self, user_id: str) -> None:
         """
         Handle onboarding step updates when disconnecting Gmail.
-        
+
         Args:
             user_id: UUID string of the user
-            
+
         Raises:
             GmailConnectionError: If database operation fails
         """
@@ -587,7 +602,9 @@ class GmailConnectionService:
                 user_id=user_id,
                 error=str(e),
             )
-            raise GmailConnectionError(f"Database error updating onboarding: {e}", user_id=user_id) from e
+            raise GmailConnectionError(
+                f"Database error updating onboarding: {e}", user_id=user_id
+            ) from e
         except Exception as e:
             logger.warning(
                 "Failed to update onboarding step after Gmail disconnect",
@@ -600,7 +617,7 @@ class GmailConnectionService:
     async def _update_calendar_status_if_granted(self, user_id: str, scope: str) -> None:
         """
         Check if Calendar permissions were granted and update user status accordingly.
-        
+
         Args:
             user_id: UUID string of the user
             scope: OAuth scope string from token response
@@ -609,12 +626,13 @@ class GmailConnectionService:
             # Check if scope contains calendar permissions
             calendar_indicators = ["calendar.readonly", "calendar.events", "calendar"]
             has_calendar_access = any(indicator in scope for indicator in calendar_indicators)
-            
+
             if has_calendar_access:
                 # Import and call the calendar status update function
-                from app.services.calendar_connection_service import _update_user_calendar_status
+                from app.services.calendar_operations_service import _update_user_calendar_status
+
                 await _update_user_calendar_status(user_id, connected=True)
-                
+
                 logger.info(
                     "Calendar permissions detected and status updated",
                     user_id=user_id,
@@ -626,7 +644,7 @@ class GmailConnectionService:
                     user_id=user_id,
                     scope_preview=scope[:50] + "..." if len(scope) > 50 else scope,
                 )
-                
+
         except Exception as e:
             logger.error(
                 "Error updating calendar status after OAuth completion",
@@ -662,7 +680,7 @@ class GmailConnectionService:
 
         Returns:
             dict: Connection metrics and statistics
-            
+
         Raises:
             GmailConnectionError: If database operation fails
         """
@@ -684,9 +702,7 @@ class GmailConnectionService:
                 total_users, connected_users, completed_users = row_values
 
                 # Calculate connection rate
-                connection_rate = (
-                    (connected_users / total_users * 100) if total_users > 0 else 0
-                )
+                connection_rate = (connected_users / total_users * 100) if total_users > 0 else 0
 
                 return {
                     "total_users": total_users,
@@ -742,10 +758,14 @@ class GmailConnectionService:
                 try:
                     oauth_state_result = asyncio.run(oauth_state_health())
                     if isinstance(oauth_state_result, dict):
-                        health_data["oauth_state_service"] = oauth_state_result.get("healthy", False)
+                        health_data["oauth_state_service"] = oauth_state_result.get(
+                            "healthy", False
+                        )
                     else:
                         health_data["oauth_state_service"] = False
-                        health_data["oauth_state_error"] = f"Unexpected result type: {type(oauth_state_result)}"
+                        health_data["oauth_state_error"] = (
+                            f"Unexpected result type: {type(oauth_state_result)}"
+                        )
                 except Exception as e:
                     health_data["oauth_state_service"] = False
                     health_data["oauth_state_error"] = str(e)
@@ -756,16 +776,20 @@ class GmailConnectionService:
                         health_data["token_service"] = token_service_result.get("healthy", False)
                     else:
                         health_data["token_service"] = False
-                        health_data["token_service_error"] = f"Unexpected result type: {type(token_service_result)}"
+                        health_data["token_service_error"] = (
+                            f"Unexpected result type: {type(token_service_result)}"
+                        )
                 except Exception as e:
                     health_data["token_service"] = False
                     health_data["token_service_error"] = str(e)
-                
+
                 # Sync health check
                 try:
                     google_oauth_result = google_oauth_health()
                     if isinstance(google_oauth_result, dict):
-                        health_data["google_oauth_service"] = google_oauth_result.get("healthy", False)
+                        health_data["google_oauth_service"] = google_oauth_result.get(
+                            "healthy", False
+                        )
                     else:
                         health_data["google_oauth_service"] = False
                 except Exception as e:

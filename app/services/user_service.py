@@ -91,8 +91,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
             onboarding_completed=onboarding_completed,
             gmail_connected=gmail_connected,
             onboarding_step=onboarding_step,
-            voice_preferences=voice_preferences
-            or {"tone": "professional", "speed": "normal"},
+            voice_preferences=voice_preferences or {"tone": "professional", "speed": "normal"},
             plan=plan,
             created_at=created_at,
             updated_at=updated_at,
@@ -517,9 +516,7 @@ async def get_users_needing_gmail_attention() -> list:
                 }
             )
 
-        logger.info(
-            "Found users needing Gmail attention", count=len(users_needing_attention)
-        )
+        logger.info("Found users needing Gmail attention", count=len(users_needing_attention))
 
         return users_needing_attention
 
@@ -573,18 +570,12 @@ async def get_user_service_health() -> dict:
             ) = row_values
 
             # Calculate health metrics
-            gmail_connection_rate = (
-                (gmail_connected / total_users * 100) if total_users > 0 else 0
-            )
-            onboarding_completion_rate = (
-                (completed / total_users * 100) if total_users > 0 else 0
-            )
+            gmail_connection_rate = (gmail_connected / total_users * 100) if total_users > 0 else 0
+            onboarding_completion_rate = (completed / total_users * 100) if total_users > 0 else 0
             token_consistency_rate = (
                 (with_tokens / gmail_connected * 100) if gmail_connected > 0 else 100
             )
-            token_health_rate = (
-                (with_valid_tokens / with_tokens * 100) if with_tokens > 0 else 100
-            )
+            token_health_rate = (with_valid_tokens / with_tokens * 100) if with_tokens > 0 else 100
 
             health_data = {
                 "healthy": True,
@@ -596,9 +587,7 @@ async def get_user_service_health() -> dict:
                     "completed_onboarding": completed,
                     "stuck_on_gmail_step": stuck_on_gmail,
                     "gmail_connection_rate_percent": round(gmail_connection_rate, 2),
-                    "onboarding_completion_rate_percent": round(
-                        onboarding_completion_rate, 2
-                    ),
+                    "onboarding_completion_rate_percent": round(onboarding_completion_rate, 2),
                 },
                 "gmail_health_metrics": {
                     "users_with_tokens": with_tokens,

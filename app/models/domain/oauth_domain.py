@@ -58,7 +58,7 @@ class OAuthToken(BaseModel):
         """Get detailed breakdown of all granted scopes."""
         gmail_scopes = self.get_gmail_scopes()
         calendar_scopes = self.get_calendar_scopes()
-        
+
         return {
             "gmail": {
                 "scopes": gmail_scopes,
@@ -69,7 +69,7 @@ class OAuthToken(BaseModel):
                     "send": any("send" in scope for scope in gmail_scopes),
                     "compose": any("compose" in scope for scope in gmail_scopes),
                     "modify": any("modify" in scope for scope in gmail_scopes),
-                }
+                },
             },
             "calendar": {
                 "scopes": calendar_scopes,
@@ -79,7 +79,7 @@ class OAuthToken(BaseModel):
                     "read": any("readonly" in scope for scope in calendar_scopes),
                     "events": any("events" in scope for scope in calendar_scopes),
                     "full": any(scope.endswith("calendar") for scope in calendar_scopes),
-                }
+                },
             },
             "total_scopes": len(self.scope.split()) if self.scope else 0,
         }
@@ -87,12 +87,12 @@ class OAuthToken(BaseModel):
     def validate_required_permissions(self) -> dict:
         """
         Validate that token has all required permissions for triage app.
-        
+
         Returns:
             dict: Validation results with missing permissions
         """
         scope_breakdown = self.get_scope_breakdown()
-        
+
         # Required Gmail permissions
         gmail_requirements = {
             "read": scope_breakdown["gmail"]["permissions"]["read"],
@@ -100,17 +100,19 @@ class OAuthToken(BaseModel):
             "compose": scope_breakdown["gmail"]["permissions"]["compose"],
             "modify": scope_breakdown["gmail"]["permissions"]["modify"],
         }
-        
+
         # Required Calendar permissions
         calendar_requirements = {
             "read": scope_breakdown["calendar"]["permissions"]["read"],
             "events": scope_breakdown["calendar"]["permissions"]["events"],
         }
-        
+
         # Check for missing permissions
         missing_gmail = [perm for perm, has_perm in gmail_requirements.items() if not has_perm]
-        missing_calendar = [perm for perm, has_perm in calendar_requirements.items() if not has_perm]
-        
+        missing_calendar = [
+            perm for perm, has_perm in calendar_requirements.items() if not has_perm
+        ]
+
         return {
             "valid": len(missing_gmail) == 0 and len(missing_calendar) == 0,
             "gmail_valid": len(missing_gmail) == 0,
@@ -125,19 +127,19 @@ class OAuthToken(BaseModel):
     def get_health_status(self) -> dict:
         """
         Get comprehensive health status for Gmail + Calendar access.
-        
+
         Returns:
             dict: Health status with recommendations
         """
         now = datetime.now(UTC)
-        
+
         # Basic token health
         is_expired = self.is_expired()
         needs_refresh = self.needs_refresh(buffer_minutes=60)  # 1 hour buffer
-        
+
         # Permission validation
         permission_validation = self.validate_required_permissions()
-        
+
         # Time-based status
         if is_expired:
             status = "expired"
@@ -166,7 +168,7 @@ class OAuthToken(BaseModel):
             message = f"All permissions granted, expires in {int(hours_left)} hours"
             action_required = None
             severity = "none"
-        
+
         return {
             "status": status,
             "message": message,
@@ -179,7 +181,7 @@ class OAuthToken(BaseModel):
                 "permission_validation": permission_validation,
                 "has_gmail_access": self.has_gmail_access(),
                 "has_calendar_access": self.has_calendar_access(),
-            }
+            },
         }
 
 
@@ -240,7 +242,7 @@ class EnhancedConnectionStatus:
         """Get combined health status for both services."""
         gmail_status = self.gmail_health.get("status", "unknown")
         calendar_status = self.calendar_health.get("status", "unknown")
-        
+
         # Determine overall status priority: error > expired > expiring > healthy
         status_priority = {
             "error": 4,
@@ -250,20 +252,20 @@ class EnhancedConnectionStatus:
             "healthy": 1,
             "unknown": 0,
         }
-        
+
         gmail_priority = status_priority.get(gmail_status, 0)
         calendar_priority = status_priority.get(calendar_status, 0)
-        
+
         if gmail_priority >= calendar_priority:
             overall_status = gmail_status
             primary_service = "Gmail"
         else:
             overall_status = calendar_status
             primary_service = "Calendar"
-        
+
         # Determine if action is needed
         needs_attention = overall_status in ["error", "expired", "insufficient_permissions"]
-        
+
         return {
             "overall_status": overall_status,
             "primary_concern": primary_service if needs_attention else None,
@@ -281,7 +283,7 @@ class EnhancedConnectionStatus:
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         overall_health = self.get_overall_health()
-        
+
         return {
             "connected": self.connected,
             "provider": self.provider,

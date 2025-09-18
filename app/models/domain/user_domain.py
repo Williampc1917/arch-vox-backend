@@ -42,7 +42,7 @@ class UserProfile(BaseModel):
 
     # Just add connection status
     calendar_connected: bool = False
-    
+
     # Runtime calendar health (not stored in DB)
     calendar_connection_health: str | None = None
     calendar_health_details: dict[str, Any] | None = None

@@ -24,14 +24,13 @@ GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 # UPDATED: Combined Gmail + Calendar scopes for triage functionality
 GMAIL_CALENDAR_SCOPES = [
     # Gmail scopes for email management
-    "https://www.googleapis.com/auth/gmail.readonly",      # Read emails
-    "https://www.googleapis.com/auth/gmail.send",          # Send emails
-    "https://www.googleapis.com/auth/gmail.compose",       # Draft emails
-    "https://www.googleapis.com/auth/gmail.modify",        # Mark as read/unread
-    
+    "https://www.googleapis.com/auth/gmail.readonly",  # Read emails
+    "https://www.googleapis.com/auth/gmail.send",  # Send emails
+    "https://www.googleapis.com/auth/gmail.compose",  # Draft emails
+    "https://www.googleapis.com/auth/gmail.modify",  # Mark as read/unread
     # Calendar scopes for availability and event management
-    "https://www.googleapis.com/auth/calendar.readonly",   # Check availability
-    "https://www.googleapis.com/auth/calendar.events",     # Create/modify events
+    "https://www.googleapis.com/auth/calendar.readonly",  # Check availability
+    "https://www.googleapis.com/auth/calendar.events",  # Create/modify events
 ]
 
 # Request timeouts and retry configuration
@@ -73,25 +72,21 @@ class TokenResponse:
 
     def has_gmail_access(self) -> bool:
         """Check if token has Gmail API access."""
-        gmail_scopes = [
-            "gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"
-        ]
+        gmail_scopes = ["gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"]
         return any(scope in self.scope for scope in gmail_scopes)
 
     def has_calendar_access(self) -> bool:
         """Check if token has Calendar API access."""
-        calendar_scopes = [
-            "calendar.readonly", "calendar.events", "calendar"
-        ]
+        calendar_scopes = ["calendar.readonly", "calendar.events", "calendar"]
         return any(scope in self.scope for scope in calendar_scopes)
 
     def get_granted_scopes(self) -> dict:
         """Get breakdown of granted scopes by service."""
         scopes = self.scope.split() if self.scope else []
-        
+
         gmail_scopes = [s for s in scopes if "gmail" in s]
         calendar_scopes = [s for s in scopes if "calendar" in s]
-        
+
         return {
             "gmail": gmail_scopes,
             "calendar": calendar_scopes,
@@ -387,20 +382,16 @@ class GoogleOAuthService:
         """
         try:
             granted_scopes = token_response.get_granted_scopes()
-            
+
             # Check for required Gmail scopes
-            required_gmail = [
-                "gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"
-            ]
+            required_gmail = ["gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"]
             missing_gmail = []
             for required in required_gmail:
                 if not any(required in scope for scope in granted_scopes["gmail"]):
                     missing_gmail.append(required)
 
             # Check for required Calendar scopes
-            required_calendar = [
-                "calendar.readonly", "calendar.events"
-            ]
+            required_calendar = ["calendar.readonly", "calendar.events"]
             missing_calendar = []
             for required in required_calendar:
                 if not any(required in scope for scope in granted_scopes["calendar"]):
@@ -582,7 +573,7 @@ class GoogleOAuthService:
                         "total": len(GMAIL_CALENDAR_SCOPES),
                         "gmail": len([s for s in GMAIL_CALENDAR_SCOPES if "gmail" in s]),
                         "calendar": len([s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s]),
-                    }
+                    },
                 },
                 "redirect_uri": self.redirect_uri,
             }

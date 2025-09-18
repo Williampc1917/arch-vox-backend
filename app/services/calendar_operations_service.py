@@ -1,19 +1,24 @@
 """
-Calendar Connection Service for high-level calendar orchestration.
+Calendar operations Service for high-level calendar orchestration.
 Manages calendar connection status, health monitoring, and integration with user management.
+UPDATED: Now uses domain models from app.models.domain.calendar_domain
 ARCHITECTURE: Mirrors gmail_connection_service.py patterns for consistency.
 """
 
-from datetime import datetime
-from typing import Any, Dict, List
+from datetime import UTC, datetime
+from typing import Any
 
-from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
+from app.db.helpers import DatabaseError, execute_query, with_db_retry
 from app.infrastructure.observability.logging import get_logger
+from app.models.domain.calendar_domain import (
+    CalendarAvailability,
+    CalendarConnectionStatus,
+    CalendarEvent,
+    CalendarInfo,
+)
 from app.services.google_calendar_service import (
     GoogleCalendarError,
     google_calendar_service,
-    CalendarInfo,
-    CalendarEvent,
 )
 from app.services.token_service import (
     TokenServiceError,
@@ -26,61 +31,17 @@ logger = get_logger(__name__)
 class CalendarConnectionError(Exception):
     """Custom exception for calendar connection operations."""
 
-    def __init__(self, message: str, user_id: str | None = None, error_code: str | None = None, recoverable: bool = True):
+    def __init__(
+        self,
+        message: str,
+        user_id: str | None = None,
+        error_code: str | None = None,
+        recoverable: bool = True,
+    ):
         super().__init__(message)
         self.user_id = user_id
         self.error_code = error_code
         self.recoverable = recoverable
-
-
-class CalendarConnectionStatus:
-    """Represents calendar connection status for a user."""
-
-    def __init__(
-        self,
-        connected: bool,
-        user_id: str,
-        provider: str = "google",
-        scope: str | None = None,
-        expires_at: datetime | None = None,
-        needs_refresh: bool = False,
-        last_used: datetime | None = None,
-        connection_health: str = "unknown",
-        calendars_accessible: int = 0,
-        primary_calendar_available: bool = False,
-        can_create_events: bool = False,
-        health_details: Dict[str, Any] | None = None,
-    ):
-        self.connected = connected
-        self.user_id = user_id
-        self.provider = provider
-        self.scope = scope
-        self.expires_at = expires_at
-        self.needs_refresh = needs_refresh
-        self.last_used = last_used
-        self.connection_health = connection_health
-        self.calendars_accessible = calendars_accessible
-        self.primary_calendar_available = primary_calendar_available
-        self.can_create_events = can_create_events
-        self.health_details = health_details or {}
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API responses."""
-        return {
-            "connected": self.connected,
-            "provider": self.provider,
-            "scope": self.scope,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "needs_refresh": self.needs_refresh,
-            "last_used": self.last_used.isoformat() if self.last_used else None,
-            "connection_health": self.connection_health,
-            "capabilities": {
-                "calendars_accessible": self.calendars_accessible,
-                "primary_calendar_available": self.primary_calendar_available,
-                "can_create_events": self.can_create_events,
-            },
-            "health_details": self.health_details,
-        }
 
 
 class CalendarConnectionService:
@@ -98,10 +59,11 @@ class CalendarConnectionService:
         """Validate service configuration when first used."""
         if self._config_validated:
             return
-            
+
         # Test database pool availability
         try:
             from app.db.pool import db_pool
+
             if not db_pool._initialized:
                 raise CalendarConnectionError("Database pool not initialized")
         except Exception as e:
@@ -121,7 +83,7 @@ class CalendarConnectionService:
             CalendarConnectionStatus: Complete calendar connection information
         """
         self._ensure_config_validated()
-        
+
         try:
             logger.debug("Getting calendar connection status", user_id=user_id)
 
@@ -130,9 +92,7 @@ class CalendarConnectionService:
 
             if not oauth_tokens:
                 return CalendarConnectionStatus(
-                    connected=False, 
-                    user_id=user_id, 
-                    connection_health="no_tokens"
+                    connected=False, user_id=user_id, connection_health="no_tokens"
                 )
 
             if not oauth_tokens.has_calendar_access():
@@ -147,7 +107,7 @@ class CalendarConnectionService:
 
             # Test calendar access and get capabilities
             calendar_capabilities = await self._test_calendar_access(oauth_tokens.access_token)
-            
+
             # Determine connection health
             connection_health = self._assess_calendar_health(oauth_tokens, calendar_capabilities)
 
@@ -174,13 +134,13 @@ class CalendarConnectionService:
                 error_type=type(e).__name__,
             )
             return CalendarConnectionStatus(
-                connected=False, 
-                user_id=user_id, 
+                connected=False,
+                user_id=user_id,
                 connection_health="error",
-                health_details={"error": str(e)}
+                health_details={"error": str(e)},
             )
 
-    async def _test_calendar_access(self, access_token: str) -> Dict[str, Any]:
+    async def _test_calendar_access(self, access_token: str) -> dict[str, Any]:
         """
         Test calendar access and determine capabilities.
 
@@ -193,7 +153,7 @@ class CalendarConnectionService:
         try:
             # Test by listing calendars
             calendars = await google_calendar_service.list_calendars(access_token)
-            
+
             # Find primary calendar
             primary_calendar = None
             for calendar in calendars:
@@ -209,7 +169,9 @@ class CalendarConnectionService:
                 "calendars_count": readable_calendars,
                 "writable_calendars": writable_calendars,
                 "has_primary": primary_calendar is not None,
-                "can_create_events": primary_calendar.can_create_events() if primary_calendar else False,
+                "can_create_events": (
+                    primary_calendar.can_create_events() if primary_calendar else False
+                ),
                 "primary_calendar_id": primary_calendar.id if primary_calendar else None,
                 "access_test_successful": True,
             }
@@ -239,7 +201,9 @@ class CalendarConnectionService:
                 "error_code": getattr(e, "error_code", None),
             }
 
-    def _assess_calendar_health(self, oauth_tokens, calendar_capabilities: Dict[str, Any]) -> Dict[str, Any]:
+    def _assess_calendar_health(
+        self, oauth_tokens, calendar_capabilities: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Assess calendar connection health based on tokens and capabilities.
 
@@ -253,7 +217,7 @@ class CalendarConnectionService:
         try:
             # Check token health first
             token_health = oauth_tokens.get_health_status()
-            
+
             # Calendar-specific health checks
             if not calendar_capabilities.get("access_test_successful", False):
                 return {
@@ -265,7 +229,7 @@ class CalendarConnectionService:
                         "token_health": token_health,
                         "calendar_error": calendar_capabilities.get("error", "Unknown error"),
                         "error_code": calendar_capabilities.get("error_code"),
-                    }
+                    },
                 }
 
             if not calendar_capabilities.get("has_primary", False):
@@ -277,7 +241,7 @@ class CalendarConnectionService:
                     "details": {
                         "token_health": token_health,
                         "calendars_found": calendar_capabilities.get("calendars_count", 0),
-                    }
+                    },
                 }
 
             if not calendar_capabilities.get("can_create_events", False):
@@ -290,7 +254,7 @@ class CalendarConnectionService:
                         "token_health": token_health,
                         "calendars_accessible": calendar_capabilities.get("calendars_count", 0),
                         "writable_calendars": calendar_capabilities.get("writable_calendars", 0),
-                    }
+                    },
                 }
 
             # Check token-based health
@@ -303,7 +267,7 @@ class CalendarConnectionService:
                     "details": {
                         "token_health": token_health,
                         "calendar_capabilities": calendar_capabilities,
-                    }
+                    },
                 }
 
             # All checks passed
@@ -315,7 +279,7 @@ class CalendarConnectionService:
                 "details": {
                     "token_health": token_health,
                     "calendar_capabilities": calendar_capabilities,
-                }
+                },
             }
 
         except Exception as e:
@@ -324,10 +288,10 @@ class CalendarConnectionService:
                 "status": "assessment_error",
                 "message": f"Health assessment failed: {e}",
                 "severity": "medium",
-                "details": {"error": str(e)}
+                "details": {"error": str(e)},
             }
 
-    async def get_user_calendars(self, user_id: str) -> List[CalendarInfo]:
+    async def get_user_calendars(self, user_id: str) -> list[CalendarInfo]:
         """
         Get list of calendars accessible to user.
 
@@ -341,7 +305,7 @@ class CalendarConnectionService:
             CalendarConnectionError: If getting calendars fails
         """
         self._ensure_config_validated()
-        
+
         try:
             # Get OAuth tokens
             oauth_tokens = await get_oauth_tokens(user_id)
@@ -388,11 +352,8 @@ class CalendarConnectionService:
             raise CalendarConnectionError(f"Failed to get calendars: {e}", user_id=user_id) from e
 
     async def get_upcoming_events(
-        self, 
-        user_id: str, 
-        hours_ahead: int = 24, 
-        max_events: int = 10
-    ) -> List[CalendarEvent]:
+        self, user_id: str, hours_ahead: int = 24, max_events: int = 10
+    ) -> list[CalendarEvent]:
         """
         Get upcoming events for user.
 
@@ -408,7 +369,7 @@ class CalendarConnectionService:
             CalendarConnectionError: If getting events fails
         """
         self._ensure_config_validated()
-        
+
         try:
             # Get OAuth tokens
             oauth_tokens = await get_oauth_tokens(user_id)
@@ -419,8 +380,9 @@ class CalendarConnectionService:
                 raise CalendarConnectionError("No calendar permissions", user_id=user_id)
 
             # Calculate time range
-            from datetime import timedelta, timezone
-            now = datetime.now(timezone.utc)
+            from datetime import timedelta
+
+            now = datetime.now(UTC)
             time_max = now + timedelta(hours=hours_ahead)
 
             # Get events
@@ -458,11 +420,8 @@ class CalendarConnectionService:
             raise CalendarConnectionError(f"Failed to get events: {e}", user_id=user_id) from e
 
     async def check_availability(
-        self, 
-        user_id: str, 
-        start_time: datetime, 
-        end_time: datetime
-    ) -> Dict[str, Any]:
+        self, user_id: str, start_time: datetime, end_time: datetime
+    ) -> CalendarAvailability:
         """
         Check if user is available during specified time.
 
@@ -472,13 +431,13 @@ class CalendarConnectionService:
             end_time: End of time period to check
 
         Returns:
-            Dict: Availability information
+            CalendarAvailability: Availability information with smart analysis
 
         Raises:
             CalendarConnectionError: If availability check fails
         """
         self._ensure_config_validated()
-        
+
         try:
             # Get OAuth tokens
             oauth_tokens = await get_oauth_tokens(user_id)
@@ -488,18 +447,29 @@ class CalendarConnectionService:
             if not oauth_tokens.has_calendar_access():
                 raise CalendarConnectionError("No calendar permissions", user_id=user_id)
 
-            # Check availability
-            availability = await google_calendar_service.check_availability(
+            # Check availability using Google Calendar service
+            availability_data = await google_calendar_service.check_availability(
                 access_token=oauth_tokens.access_token,
                 start_time=start_time,
                 end_time=end_time,
             )
 
+            # Convert to domain model with enhanced functionality
+            availability = CalendarAvailability(
+                is_free=availability_data["is_free"],
+                start_time=start_time,
+                end_time=end_time,
+                busy_periods=availability_data["busy_periods"],
+                calendars_checked=availability_data["calendars_checked"],
+                total_conflicts=availability_data["total_conflicts"],
+            )
+
             logger.info(
                 "Availability check completed",
                 user_id=user_id,
-                is_free=availability["is_free"],
-                conflicts=availability["total_conflicts"],
+                is_free=availability.is_free,
+                conflicts=availability.total_conflicts,
+                duration_minutes=availability.duration_minutes(),
             )
 
             return availability
@@ -519,7 +489,9 @@ class CalendarConnectionService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise CalendarConnectionError(f"Failed to check availability: {e}", user_id=user_id) from e
+            raise CalendarConnectionError(
+                f"Failed to check availability: {e}", user_id=user_id
+            ) from e
 
     async def create_event(
         self,
@@ -550,7 +522,7 @@ class CalendarConnectionService:
             CalendarConnectionError: If event creation fails
         """
         self._ensure_config_validated()
-        
+
         try:
             # Get OAuth tokens
             oauth_tokens = await get_oauth_tokens(user_id)
@@ -631,7 +603,7 @@ class CalendarConnectionService:
             )
             # Don't raise exception for usage tracking failure
 
-    async def get_connection_metrics(self) -> Dict[str, Any]:
+    async def get_connection_metrics(self) -> dict[str, Any]:
         """
         Get calendar connection metrics for monitoring.
 
@@ -642,13 +614,15 @@ class CalendarConnectionService:
             # This would query database for calendar-specific metrics
             # For now, leverage existing user service metrics
             from app.services.user_service import get_user_service_health
-            
+
             user_health = await get_user_service_health()
-            
+
             # Extract calendar-relevant metrics
             metrics = {
                 "total_users": user_health.get("user_metrics", {}).get("total_active_users", 0),
-                "users_with_tokens": user_health.get("gmail_health_metrics", {}).get("users_with_tokens", 0),
+                "users_with_tokens": user_health.get("gmail_health_metrics", {}).get(
+                    "users_with_tokens", 0
+                ),
                 "healthy_connections": "unknown",  # Would need calendar-specific health tracking
                 "calendar_api_connectivity": "unknown",  # Would test Calendar API
                 "service": "calendar_connection",
@@ -665,7 +639,7 @@ class CalendarConnectionService:
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """
         Check calendar connection service health.
 
@@ -682,7 +656,7 @@ class CalendarConnectionService:
 
             # Test database connectivity (use existing pattern)
             try:
-                from app.services.user_service import get_user_service_health
+
                 # We'll test this asyncronously in a real implementation
                 # For now, assume healthy if no exception
                 health_data["database_connectivity"] = "ok"
@@ -693,11 +667,16 @@ class CalendarConnectionService:
             # Test calendar API service health
             try:
                 from app.services.google_calendar_service import google_calendar_health
+
                 calendar_health = google_calendar_health()  # Remove await since it's not async
-                health_data["calendar_api_connectivity"] = "ok" if calendar_health.get("healthy", False) else "error"
+                health_data["calendar_api_connectivity"] = (
+                    "ok" if calendar_health.get("healthy", False) else "error"
+                )
                 if not calendar_health.get("healthy", False):
                     health_data["healthy"] = False
-                    health_data["calendar_api_error"] = calendar_health.get("error", "Unknown error")
+                    health_data["calendar_api_error"] = calendar_health.get(
+                        "error", "Unknown error"
+                    )
             except Exception as e:
                 health_data["calendar_api_connectivity"] = f"error: {str(e)}"
                 health_data["healthy"] = False
@@ -705,7 +684,7 @@ class CalendarConnectionService:
             # Add service capabilities
             health_data["capabilities"] = [
                 "get_connection_status",
-                "get_user_calendars", 
+                "get_user_calendars",
                 "get_upcoming_events",
                 "check_availability",
                 "create_event",
@@ -733,19 +712,24 @@ async def get_calendar_status(user_id: str) -> CalendarConnectionStatus:
     return await calendar_connection_service.get_connection_status(user_id)
 
 
-async def get_user_calendars(user_id: str) -> List[CalendarInfo]:
+async def get_user_calendars(user_id: str) -> list[CalendarInfo]:
     """Get calendars accessible to user."""
     return await calendar_connection_service.get_user_calendars(user_id)
 
 
-async def get_user_upcoming_events(user_id: str, hours_ahead: int = 24) -> List[CalendarEvent]:
+async def get_user_upcoming_events(user_id: str, hours_ahead: int = 24) -> list[CalendarEvent]:
     """Get upcoming events for user."""
     return await calendar_connection_service.get_upcoming_events(user_id, hours_ahead)
 
 
-async def check_user_availability(user_id: str, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
+async def check_user_availability(
+    user_id: str, start_time: datetime, end_time: datetime
+) -> dict[str, Any]:
     """Check if user is available during specified time."""
-    return await calendar_connection_service.check_availability(user_id, start_time, end_time)
+    availability = await calendar_connection_service.check_availability(
+        user_id, start_time, end_time
+    )
+    return availability.to_dict()  # Convert domain model to dict for backward compatibility
 
 
 async def create_user_event(
@@ -762,9 +746,10 @@ async def create_user_event(
     )
 
 
-async def calendar_connection_health() -> Dict[str, Any]:
+async def calendar_connection_health() -> dict[str, Any]:
     """Check calendar connection service health."""
     return await calendar_connection_service.health_check()
+
 
 @with_db_retry(max_retries=3, base_delay=0.1)
 async def _update_user_calendar_status(user_id: str, connected: bool) -> bool:
@@ -775,17 +760,17 @@ async def _update_user_calendar_status(user_id: str, connected: bool) -> bool:
         SET calendar_connected = %s, updated_at = NOW()
         WHERE id = %s AND is_active = true
         """
-        
+
         affected_rows = await execute_query(query, (connected, user_id))
-        
+
         success = affected_rows > 0
         if success:
             logger.info("User calendar status updated", user_id=user_id, connected=connected)
         else:
             logger.warning("No user found to update calendar status", user_id=user_id)
-            
+
         return success
-        
+
     except DatabaseError as e:
         logger.error("Database error updating calendar status", user_id=user_id, error=str(e))
         return False

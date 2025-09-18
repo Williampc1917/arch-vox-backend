@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import requests
 
-from app.db.helpers import DatabaseError, execute_query, fetch_one, fetch_all, with_db_retry
+from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.services.encryption_service import EncryptionError, decrypt_token
 
@@ -185,6 +185,7 @@ class OAuthCleanupJob:
         # Test database pool availability
         try:
             from app.db.pool import db_pool
+
             if not db_pool._initialized:
                 raise OAuthCleanupJobError("Database pool not initialized")
         except Exception as e:
@@ -358,10 +359,10 @@ class OAuthCleanupJob:
     async def _get_all_tokens(self) -> list[dict]:
         """
         Get all OAuth tokens for health checking.
-        
+
         Returns:
             list[dict]: List of token records
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -403,10 +404,14 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.error("Database error fetching tokens for health check", error=str(e))
-            raise OAuthCleanupJobError(f"Database error fetching tokens: {e}", operation="get_tokens") from e
+            raise OAuthCleanupJobError(
+                f"Database error fetching tokens: {e}", operation="get_tokens"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error fetching tokens for health check", error=str(e))
-            raise OAuthCleanupJobError(f"Failed to fetch tokens: {e}", operation="get_tokens") from e
+            raise OAuthCleanupJobError(
+                f"Failed to fetch tokens: {e}", operation="get_tokens"
+            ) from e
 
     async def _check_token_health(self, token_record: dict) -> str:
         """
@@ -467,13 +472,13 @@ class OAuthCleanupJob:
     async def _user_exists(self, user_id: str) -> bool:
         """
         Check if user exists in the database.
-        
+
         Args:
             user_id: UUID string of the user
-            
+
         Returns:
             bool: True if user exists and is active, False otherwise
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -486,9 +491,13 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.warning("Database error checking user existence", user_id=user_id, error=str(e))
-            raise OAuthCleanupJobError(f"Database error checking user: {e}", operation="user_exists") from e
+            raise OAuthCleanupJobError(
+                f"Database error checking user: {e}", operation="user_exists"
+            ) from e
         except Exception as e:
-            logger.warning("Unexpected error checking user existence", user_id=user_id, error=str(e))
+            logger.warning(
+                "Unexpected error checking user existence", user_id=user_id, error=str(e)
+            )
             # Assume user exists if we can't check to avoid false removals
             return True
 
@@ -496,11 +505,11 @@ class OAuthCleanupJob:
     async def _remove_invalid_token(self, user_id: str, reason: str):
         """
         Remove invalid token and update user status.
-        
+
         Args:
             user_id: UUID string of the user
             reason: Reason for token removal
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -521,10 +530,14 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.error("Database error removing invalid token", user_id=user_id, error=str(e))
-            raise OAuthCleanupJobError(f"Database error removing token: {e}", operation="remove_token") from e
+            raise OAuthCleanupJobError(
+                f"Database error removing token: {e}", operation="remove_token"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error removing invalid token", user_id=user_id, error=str(e))
-            raise OAuthCleanupJobError(f"Failed to remove token: {e}", operation="remove_token") from e
+            raise OAuthCleanupJobError(
+                f"Failed to remove token: {e}", operation="remove_token"
+            ) from e
 
     async def _fix_user_status_inconsistencies(self):
         """Fix inconsistencies between user status and token existence."""
@@ -548,10 +561,10 @@ class OAuthCleanupJob:
     async def _find_status_inconsistencies(self) -> list[str]:
         """
         Find users with status inconsistencies.
-        
+
         Returns:
             list[str]: List of user IDs with inconsistent status
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -572,19 +585,23 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.error("Database error finding status inconsistencies", error=str(e))
-            raise OAuthCleanupJobError(f"Database error finding inconsistencies: {e}", operation="find_inconsistencies") from e
+            raise OAuthCleanupJobError(
+                f"Database error finding inconsistencies: {e}", operation="find_inconsistencies"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error finding status inconsistencies", error=str(e))
-            raise OAuthCleanupJobError(f"Failed to find inconsistencies: {e}", operation="find_inconsistencies") from e
+            raise OAuthCleanupJobError(
+                f"Failed to find inconsistencies: {e}", operation="find_inconsistencies"
+            ) from e
 
     @with_db_retry(max_retries=3, base_delay=0.1)
     async def _fix_user_status(self, user_id: str):
         """
         Fix user status inconsistency.
-        
+
         Args:
             user_id: UUID string of the user
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -614,7 +631,9 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.error("Database error fixing user status", user_id=user_id, error=str(e))
-            raise OAuthCleanupJobError(f"Database error fixing status: {e}", operation="fix_status") from e
+            raise OAuthCleanupJobError(
+                f"Database error fixing status: {e}", operation="fix_status"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error fixing user status", user_id=user_id, error=str(e))
             raise OAuthCleanupJobError(f"Failed to fix status: {e}", operation="fix_status") from e
@@ -659,7 +678,7 @@ class OAuthCleanupJob:
 
         try:
             # Check dependent services
-            from app.services.gmail_connection_service import gmail_connection_health
+            from app.services.gmail_auth_service import gmail_connection_health
             from app.services.google_oauth_service import google_oauth_health
             from app.services.oauth_state_service import oauth_state_health
             from app.services.token_service import token_service_health
@@ -702,10 +721,10 @@ class OAuthCleanupJob:
     async def _get_token_statistics(self) -> dict:
         """
         Get token usage and health statistics.
-        
+
         Returns:
             dict: Token statistics
-            
+
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
@@ -741,10 +760,14 @@ class OAuthCleanupJob:
 
         except DatabaseError as e:
             logger.error("Database error getting token statistics", error=str(e))
-            raise OAuthCleanupJobError(f"Database error getting statistics: {e}", operation="get_statistics") from e
+            raise OAuthCleanupJobError(
+                f"Database error getting statistics: {e}", operation="get_statistics"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error getting token statistics", error=str(e))
-            raise OAuthCleanupJobError(f"Failed to get statistics: {e}", operation="get_statistics") from e
+            raise OAuthCleanupJobError(
+                f"Failed to get statistics: {e}", operation="get_statistics"
+            ) from e
 
     async def _get_error_rates(self) -> dict:
         """Get recent error rates from logs (simplified version)."""

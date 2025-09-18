@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 from app.infrastructure.observability.logging import get_logger
-from app.services.gmail_connection_service import GmailConnectionError, gmail_connection_service
+from app.services.gmail_auth_service import GmailConnectionError, gmail_connection_service
 from app.services.token_service import TokenServiceError, token_service
 
 logger = get_logger(__name__)
@@ -147,6 +147,7 @@ class TokenRefreshJob:
         # Test database pool availability
         try:
             from app.db.pool import db_pool
+
             if not db_pool._initialized:
                 raise TokenRefreshJobError("Database pool not initialized")
         except Exception as e:
@@ -229,7 +230,9 @@ class TokenRefreshJob:
             self.job_metrics.finalize()
             metrics = self.job_metrics.to_dict()
             metrics["job_error"] = str(e)
-            raise TokenRefreshJobError(f"Token refresh job failed: {e}", operation="run_once") from e
+            raise TokenRefreshJobError(
+                f"Token refresh job failed: {e}", operation="run_once"
+            ) from e
 
         finally:
             self.is_running = False
@@ -237,10 +240,10 @@ class TokenRefreshJob:
     async def _get_expiring_users(self) -> list[str]:
         """
         Get users with tokens expiring soon.
-        
+
         Returns:
             list[str]: List of user IDs with expiring tokens
-            
+
         Raises:
             TokenRefreshJobError: If unable to fetch expiring users
         """
@@ -249,23 +252,27 @@ class TokenRefreshJob:
             expiring_users = await token_service.get_tokens_expiring_soon(
                 provider="google", buffer_minutes=TOKEN_REFRESH_BUFFER_MINUTES
             )
-            
+
             return expiring_users
 
         except TokenServiceError as e:
             logger.error("Token service error getting expiring users", error=str(e))
-            raise TokenRefreshJobError(f"Failed to get expiring users: {e}", operation="get_expiring_users") from e
+            raise TokenRefreshJobError(
+                f"Failed to get expiring users: {e}", operation="get_expiring_users"
+            ) from e
         except Exception as e:
             logger.error("Unexpected error getting expiring users", error=str(e))
-            raise TokenRefreshJobError(f"Unexpected error getting expiring users: {e}", operation="get_expiring_users") from e
+            raise TokenRefreshJobError(
+                f"Unexpected error getting expiring users: {e}", operation="get_expiring_users"
+            ) from e
 
     async def _process_users_in_batches(self, user_ids: list[str]):
         """
         Process users in batches with concurrency control.
-        
+
         Args:
             user_ids: List of user IDs to process
-            
+
         Raises:
             TokenRefreshJobError: If batch processing fails
         """
@@ -306,12 +313,14 @@ class TokenRefreshJob:
 
         except Exception as e:
             logger.error("Error processing users in batches", error=str(e))
-            raise TokenRefreshJobError(f"Batch processing failed: {e}", operation="process_batches") from e
+            raise TokenRefreshJobError(
+                f"Batch processing failed: {e}", operation="process_batches"
+            ) from e
 
     async def _refresh_user_token_with_semaphore(self, semaphore: asyncio.Semaphore, user_id: str):
         """
         Refresh token for a single user with concurrency control.
-        
+
         Args:
             semaphore: Semaphore to control concurrency
             user_id: UUID string of the user
@@ -372,10 +381,10 @@ class TokenRefreshJob:
 
         Args:
             user_id: UUID string of the user
-            
+
         Raises:
             TokenServiceError: If refresh fails
-            
+
         Note:
             This method is separated to make it easier to add timeout handling.
         """
