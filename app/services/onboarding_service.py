@@ -194,6 +194,7 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         SET
             onboarding_completed = true,
             onboarding_step = 'completed',
+            calendar_connected = true,  -- ADD THIS LINE
             updated_at = NOW()
         WHERE
             id = %s

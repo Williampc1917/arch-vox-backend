@@ -28,6 +28,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
     SELECT
         u.id, u.email, u.display_name, u.is_active,
         u.timezone, u.onboarding_completed, u.gmail_connected, u.onboarding_step,
+        u.calendar_connected,
         u.created_at, u.updated_at,
         us.voice_preferences,
         p.name as plan_name, p.max_daily_requests,

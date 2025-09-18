@@ -39,3 +39,13 @@ class UserProfile(BaseModel):
     gmail_token_expires_at: datetime | None = None
     gmail_last_refresh_attempt: datetime | None = None
     gmail_needs_refresh: bool = False
+
+    # Just add connection status
+    calendar_connected: bool = False
+    
+    # Runtime calendar health (not stored in DB)
+    calendar_connection_health: str | None = None
+    calendar_health_details: dict[str, Any] | None = None
+    calendar_needs_attention: bool = False
+    calendar_calendars_accessible: int = 0  # From live API call
+    calendar_can_create_events: bool = False  # From live API call

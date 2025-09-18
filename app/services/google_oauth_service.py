@@ -1,6 +1,7 @@
 """
-Google OAuth Service for Gmail API integration.
+Google OAuth Service for Gmail API + Calendar API integration.
 Handles OAuth URL generation, token exchange, and Google API interactions.
+UPDATED: Now includes Calendar scopes for Gmail + Calendar triage functionality.
 """
 
 from datetime import datetime, timedelta
@@ -20,12 +21,17 @@ GOOGLE_OAUTH_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
-# Gmail scopes - minimal permissions for email management
-GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",  # Read emails
-    "https://www.googleapis.com/auth/gmail.send",  # Send emails
-    "https://www.googleapis.com/auth/gmail.compose",  # Draft emails
-    "https://www.googleapis.com/auth/gmail.modify",  # Mark as read/unread
+# UPDATED: Combined Gmail + Calendar scopes for triage functionality
+GMAIL_CALENDAR_SCOPES = [
+    # Gmail scopes for email management
+    "https://www.googleapis.com/auth/gmail.readonly",      # Read emails
+    "https://www.googleapis.com/auth/gmail.send",          # Send emails
+    "https://www.googleapis.com/auth/gmail.compose",       # Draft emails
+    "https://www.googleapis.com/auth/gmail.modify",        # Mark as read/unread
+    
+    # Calendar scopes for availability and event management
+    "https://www.googleapis.com/auth/calendar.readonly",   # Check availability
+    "https://www.googleapis.com/auth/calendar.events",     # Create/modify events
 ]
 
 # Request timeouts and retry configuration
@@ -65,6 +71,35 @@ class TokenResponse:
         """Check if token response contains required fields."""
         return bool(self.access_token and self.token_type)
 
+    def has_gmail_access(self) -> bool:
+        """Check if token has Gmail API access."""
+        gmail_scopes = [
+            "gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"
+        ]
+        return any(scope in self.scope for scope in gmail_scopes)
+
+    def has_calendar_access(self) -> bool:
+        """Check if token has Calendar API access."""
+        calendar_scopes = [
+            "calendar.readonly", "calendar.events", "calendar"
+        ]
+        return any(scope in self.scope for scope in calendar_scopes)
+
+    def get_granted_scopes(self) -> dict:
+        """Get breakdown of granted scopes by service."""
+        scopes = self.scope.split() if self.scope else []
+        
+        gmail_scopes = [s for s in scopes if "gmail" in s]
+        calendar_scopes = [s for s in scopes if "calendar" in s]
+        
+        return {
+            "gmail": gmail_scopes,
+            "calendar": calendar_scopes,
+            "total_count": len(scopes),
+            "has_gmail": len(gmail_scopes) > 0,
+            "has_calendar": len(calendar_scopes) > 0,
+        }
+
     def to_dict(self) -> dict:
         """Convert to dictionary for database storage."""
         return {
@@ -79,10 +114,10 @@ class TokenResponse:
 
 class GoogleOAuthService:
     """
-    Service for Google OAuth 2.0 operations with Gmail API.
+    Service for Google OAuth 2.0 operations with Gmail + Calendar APIs.
 
     Handles OAuth URL generation, token exchange, refresh, and revocation
-    with proper error handling and retry logic.
+    with proper error handling and retry logic for both Gmail and Calendar access.
     """
 
     def __init__(self):
@@ -102,10 +137,12 @@ class GoogleOAuthService:
             raise GoogleOAuthError("GOOGLE_REDIRECT_URI not configured")
 
         logger.info(
-            "Google OAuth service initialized",
+            "Google OAuth service initialized with Gmail + Calendar scopes",
             client_id_preview=self.client_id[:12] + "...",
             redirect_uri=self.redirect_uri,
-            scopes_count=len(GMAIL_SCOPES),
+            total_scopes=len(GMAIL_CALENDAR_SCOPES),
+            gmail_scopes=len([s for s in GMAIL_CALENDAR_SCOPES if "gmail" in s]),
+            calendar_scopes=len([s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s]),
         )
 
     def _create_session(self) -> requests.Session:
@@ -128,7 +165,7 @@ class GoogleOAuthService:
 
     def generate_oauth_url(self, state: str) -> str:
         """
-        Generate Google OAuth authorization URL.
+        Generate Google OAuth authorization URL for Gmail + Calendar access.
 
         Args:
             state: CSRF protection state parameter
@@ -143,7 +180,7 @@ class GoogleOAuthService:
             params = {
                 "client_id": self.client_id,
                 "redirect_uri": self.redirect_uri,
-                "scope": " ".join(GMAIL_SCOPES),
+                "scope": " ".join(GMAIL_CALENDAR_SCOPES),  # UPDATED: Combined scopes
                 "response_type": "code",
                 "state": state,
                 "access_type": "offline",  # Request refresh token
@@ -153,28 +190,12 @@ class GoogleOAuthService:
 
             oauth_url = f"{GOOGLE_OAUTH_BASE_URL}?{urlencode(params)}"
 
-            # ============================================================================
-            # 🚨 TEMPORARY DEBUG LOGGING - DELETE THIS ENTIRE BLOCK AFTER TESTING! 🚨
-            # ============================================================================
-            # TODO: REMOVE THIS DEBUG LOG BEFORE PRODUCTION DEPLOYMENT
-            # This logs sensitive OAuth URLs that should not be in production logs
-            logger.warning(
-                "🔧 TEMP DEBUG: OAuth URL Generated (DELETE THIS LOG!)",
-                oauth_url=oauth_url,
-                redirect_uri=self.redirect_uri,
-                client_id_preview=self.client_id[:12] + "...",
-            )
-            print(f"🔧 DEBUG OAuth URL: {oauth_url}")  # Also print to console
-            print(f"🔧 DEBUG Redirect URI: {self.redirect_uri}")
-            # ============================================================================
-            # 🚨 END OF TEMPORARY DEBUG BLOCK - DELETE EVERYTHING ABOVE THIS LINE 🚨
-            # ============================================================================
-
             logger.info(
-                "OAuth URL generated successfully",
+                "OAuth URL generated successfully for Gmail + Calendar",
                 state_preview=state[:8] + "...",
                 url_length=len(oauth_url),
-                scopes=len(GMAIL_SCOPES),
+                gmail_scopes=len([s for s in GMAIL_CALENDAR_SCOPES if "gmail" in s]),
+                calendar_scopes=len([s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s]),
             )
 
             return oauth_url
@@ -211,7 +232,7 @@ class GoogleOAuthService:
             }
 
             logger.info(
-                "Exchanging authorization code for tokens",
+                "Exchanging authorization code for Gmail + Calendar tokens",
                 code_preview=authorization_code[:12] + "...",
             )
 
@@ -263,7 +284,7 @@ class GoogleOAuthService:
             }
 
             logger.info(
-                "Refreshing access token",
+                "Refreshing access token for Gmail + Calendar",
                 refresh_token_preview=refresh_token[:12] + "...",
             )
 
@@ -315,7 +336,7 @@ class GoogleOAuthService:
             data = {"token": token}
 
             logger.info(
-                "Revoking token",
+                "Revoking Gmail + Calendar token",
                 token_preview=token[:12] + "...",
             )
 
@@ -329,7 +350,7 @@ class GoogleOAuthService:
             success = response.status_code == 200
 
             if success:
-                logger.info("Token revoked successfully")
+                logger.info("Gmail + Calendar token revoked successfully")
             else:
                 logger.warning(
                     "Token revocation failed",
@@ -353,6 +374,71 @@ class GoogleOAuthService:
                 error=str(e),
             )
             return False
+
+    def validate_token_permissions(self, token_response: TokenResponse) -> dict:
+        """
+        Validate that token has required Gmail + Calendar permissions.
+
+        Args:
+            token_response: Token response to validate
+
+        Returns:
+            dict: Validation results with permission breakdown
+        """
+        try:
+            granted_scopes = token_response.get_granted_scopes()
+            
+            # Check for required Gmail scopes
+            required_gmail = [
+                "gmail.readonly", "gmail.send", "gmail.compose", "gmail.modify"
+            ]
+            missing_gmail = []
+            for required in required_gmail:
+                if not any(required in scope for scope in granted_scopes["gmail"]):
+                    missing_gmail.append(required)
+
+            # Check for required Calendar scopes
+            required_calendar = [
+                "calendar.readonly", "calendar.events"
+            ]
+            missing_calendar = []
+            for required in required_calendar:
+                if not any(required in scope for scope in granted_scopes["calendar"]):
+                    missing_calendar.append(required)
+
+            validation_result = {
+                "valid": len(missing_gmail) == 0 and len(missing_calendar) == 0,
+                "gmail_valid": len(missing_gmail) == 0,
+                "calendar_valid": len(missing_calendar) == 0,
+                "granted_scopes": granted_scopes,
+                "missing_gmail_scopes": missing_gmail,
+                "missing_calendar_scopes": missing_calendar,
+                "total_granted": granted_scopes["total_count"],
+                "total_required": len(GMAIL_CALENDAR_SCOPES),
+            }
+
+            logger.info(
+                "Token permission validation completed",
+                valid=validation_result["valid"],
+                gmail_valid=validation_result["gmail_valid"],
+                calendar_valid=validation_result["calendar_valid"],
+                total_granted=validation_result["total_granted"],
+            )
+
+            return validation_result
+
+        except Exception as e:
+            logger.error(
+                "Error during token permission validation",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return {
+                "valid": False,
+                "error": str(e),
+                "gmail_valid": False,
+                "calendar_valid": False,
+            }
 
     def _handle_token_response(self, response: requests.Response, operation: str) -> TokenResponse:
         """
@@ -423,12 +509,17 @@ class GoogleOAuthService:
                 )
                 raise GoogleOAuthError("Invalid token response from Google")
 
+            # Log detailed scope information
+            granted_scopes = token_response.get_granted_scopes()
             logger.info(
                 f"Google {operation} successful",
                 token_type=token_response.token_type,
                 expires_in=token_response.expires_in,
                 has_refresh_token=bool(token_response.refresh_token),
-                scope_count=len(token_response.scope.split()) if token_response.scope else 0,
+                gmail_scopes_count=len(granted_scopes["gmail"]),
+                calendar_scopes_count=len(granted_scopes["calendar"]),
+                has_gmail_access=granted_scopes["has_gmail"],
+                has_calendar_access=granted_scopes["has_calendar"],
             )
 
             return token_response
@@ -452,18 +543,18 @@ class GoogleOAuthService:
             str: User-friendly error message
         """
         error_messages = {
-            "access_denied": "Gmail access was denied. Please try connecting again and grant the required permissions.",
-            "invalid_grant": "Authorization code expired or invalid. Please try connecting to Gmail again.",
-            "invalid_client": "Gmail connection configuration error. Please contact support.",
-            "invalid_request": "Invalid Gmail connection request. Please try again.",
-            "unauthorized_client": "Gmail connection not authorized. Please contact support.",
-            "unsupported_grant_type": "Gmail connection method not supported. Please contact support.",
-            "invalid_scope": "Invalid Gmail permissions requested. Please contact support.",
+            "access_denied": "Gmail and Calendar access was denied. Please try connecting again and grant the required permissions.",
+            "invalid_grant": "Authorization code expired or invalid. Please try connecting to Gmail and Calendar again.",
+            "invalid_client": "Gmail and Calendar connection configuration error. Please contact support.",
+            "invalid_request": "Invalid Gmail and Calendar connection request. Please try again.",
+            "unauthorized_client": "Gmail and Calendar connection not authorized. Please contact support.",
+            "unsupported_grant_type": "Gmail and Calendar connection method not supported. Please contact support.",
+            "invalid_scope": "Invalid Gmail or Calendar permissions requested. Please contact support.",
         }
 
         return error_messages.get(
             error_code,
-            f"Gmail connection failed ({error_code}). Please try again or contact support.",
+            f"Gmail and Calendar connection failed ({error_code}). Please try again or contact support.",
         )
 
     def health_check(self) -> dict[str, any]:
@@ -483,7 +574,16 @@ class GoogleOAuthService:
                     "token_url": GOOGLE_TOKEN_URL,
                     "revoke_url": GOOGLE_REVOKE_URL,
                 },
-                "scopes": GMAIL_SCOPES,
+                "scopes": {
+                    "total": GMAIL_CALENDAR_SCOPES,
+                    "gmail": [s for s in GMAIL_CALENDAR_SCOPES if "gmail" in s],
+                    "calendar": [s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s],
+                    "count": {
+                        "total": len(GMAIL_CALENDAR_SCOPES),
+                        "gmail": len([s for s in GMAIL_CALENDAR_SCOPES if "gmail" in s]),
+                        "calendar": len([s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s]),
+                    }
+                },
                 "redirect_uri": self.redirect_uri,
             }
 
@@ -514,23 +614,28 @@ google_oauth_service = GoogleOAuthService()
 
 # Convenience functions for easy import
 def generate_google_oauth_url(state: str) -> str:
-    """Generate Google OAuth authorization URL."""
+    """Generate Google OAuth authorization URL for Gmail + Calendar."""
     return google_oauth_service.generate_oauth_url(state)
 
 
 def exchange_oauth_code(authorization_code: str) -> TokenResponse:
-    """Exchange authorization code for tokens."""
+    """Exchange authorization code for Gmail + Calendar tokens."""
     return google_oauth_service.exchange_code_for_tokens(authorization_code)
 
 
 def refresh_google_token(refresh_token: str) -> TokenResponse:
-    """Refresh Google access token."""
+    """Refresh Google access token for Gmail + Calendar."""
     return google_oauth_service.refresh_access_token(refresh_token)
 
 
 def revoke_google_token(token: str) -> bool:
     """Revoke Google OAuth token."""
     return google_oauth_service.revoke_token(token)
+
+
+def validate_google_token_permissions(token_response: TokenResponse) -> dict:
+    """Validate Gmail + Calendar token permissions."""
+    return google_oauth_service.validate_token_permissions(token_response)
 
 
 def google_oauth_health() -> dict[str, any]:
