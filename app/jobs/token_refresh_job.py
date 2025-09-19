@@ -6,7 +6,7 @@ REFACTORED: Now follows the same patterns as other services for consistency.
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.infrastructure.observability.logging import get_logger
 from app.services.gmail_auth_service import GmailConnectionError, gmail_connection_service
@@ -39,7 +39,7 @@ class TokenRefreshMetrics:
 
     def reset(self):
         """Reset all metrics for new job run."""
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
         self.users_processed = 0
         self.tokens_refreshed = 0
         self.refresh_failures = 0
@@ -72,7 +72,7 @@ class TokenRefreshMetrics:
             "user_id": user_id,
             "error": error,
             "disconnected": disconnected,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.errors.append(error_record)
 
@@ -93,7 +93,7 @@ class TokenRefreshMetrics:
             "user_id": user_id,
             "error": error,
             "error_type": "processing",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.errors.append(error_record)
 
@@ -103,7 +103,7 @@ class TokenRefreshMetrics:
 
     def finalize(self):
         """Finalize metrics and calculate totals."""
-        self.total_duration_seconds = (datetime.utcnow() - self.start_time).total_seconds()
+        self.total_duration_seconds = (datetime.now(timezone.utc) - self.start_time).total_seconds()
 
     def to_dict(self) -> dict:
         """Convert metrics to dictionary for logging."""
@@ -215,7 +215,7 @@ class TokenRefreshJob:
 
             # Finalize and log metrics
             self.job_metrics.finalize()
-            self.last_run_time = datetime.utcnow()
+            self.last_run_time = datetime.now(timezone.utc)
 
             metrics = self.job_metrics.to_dict()
 
@@ -434,7 +434,7 @@ class TokenRefreshJob:
             Dict: Health status and configuration
         """
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Check if job is overdue (hasn't run in 2x the interval)
             overdue_threshold = timedelta(minutes=JOB_INTERVAL_MINUTES * 2)
@@ -478,24 +478,32 @@ class TokenRefreshJob:
             }
 
 
-# Singleton instance for application use
-token_refresh_job = TokenRefreshJob()
+# Lazy singleton instance for application use
+_token_refresh_job = None
+
+
+def _get_token_refresh_job():
+    """Get or create the token refresh job singleton."""
+    global _token_refresh_job
+    if _token_refresh_job is None:
+        _token_refresh_job = TokenRefreshJob()
+    return _token_refresh_job
 
 
 # Convenience functions for easy import and background job scheduling
 async def run_token_refresh_job() -> dict:
     """Run a single iteration of the token refresh job."""
-    return await token_refresh_job.run_once()
+    return await _get_token_refresh_job().run_once()
 
 
 def get_token_refresh_job_status() -> dict:
     """Get current token refresh job status."""
-    return token_refresh_job.get_job_status()
+    return _get_token_refresh_job().get_job_status()
 
 
 def token_refresh_job_health() -> dict:
     """Check token refresh job health."""
-    return token_refresh_job.health_check()
+    return _get_token_refresh_job().health_check()
 
 
 # Background job scheduler (for use with task queue or cron)

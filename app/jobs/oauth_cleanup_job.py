@@ -5,7 +5,7 @@ REFACTORED: Now uses database connection pool instead of direct psycopg connecti
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
@@ -33,7 +33,7 @@ class CleanupMetrics:
 
     def reset(self):
         """Reset all metrics for new job run."""
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
         self.redis_states_checked = 0
         self.redis_states_cleaned = 0
         self.tokens_checked = 0
@@ -76,7 +76,7 @@ class CleanupMetrics:
             "user_id": user_id,
             "error": error,
             "error_type": "token_corruption",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -99,7 +99,7 @@ class CleanupMetrics:
         error_record = {
             "issue_type": issue_type,
             "details": details,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -118,7 +118,7 @@ class CleanupMetrics:
             "operation": operation,
             "error": error,
             "error_type": "processing",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -136,7 +136,7 @@ class CleanupMetrics:
 
     def finalize(self):
         """Finalize metrics and calculate totals."""
-        self.total_duration_seconds = (datetime.utcnow() - self.start_time).total_seconds()
+        self.total_duration_seconds = (datetime.now(timezone.utc) - self.start_time).total_seconds()  # Fixed: use timezone-aware datetime
 
     def to_dict(self) -> dict:
         """Convert metrics to dictionary for logging."""
@@ -223,7 +223,7 @@ class OAuthCleanupJob:
 
             # Finalize and log metrics
             self.job_metrics.finalize()
-            self.last_run_time = datetime.utcnow()
+            self.last_run_time = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
 
             metrics = self.job_metrics.to_dict()
 
@@ -440,7 +440,7 @@ class OAuthCleanupJob:
             # Check expiration status
             expires_at = token_record["expires_at"]
             if expires_at:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
 
                 if expires_at <= now:
                     # Token is expired
@@ -654,7 +654,7 @@ class OAuthCleanupJob:
 
             # Generate health report
             health_report = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
                 "service_health": health_issues,
                 "token_statistics": token_stats,
                 "error_rates": error_rates,
@@ -690,9 +690,15 @@ class OAuthCleanupJob:
                 ("gmail_connection", gmail_connection_health),
             ]
 
+            # Fix mixed sync/async health checks
             for service_name, health_func in services:
                 try:
-                    health = health_func()
+                    # gmail_connection_health and google_oauth_health are SYNC functions
+                    if service_name in ["google_oauth", "gmail_connection"]:
+                        health = health_func()  # Sync call
+                    else:
+                        health = await health_func()  # Async call
+                        
                     if not health.get("healthy", False):
                         health_issues.append(
                             {
@@ -794,7 +800,7 @@ class OAuthCleanupJob:
     def health_check(self) -> dict:
         """Health check for the cleanup job."""
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
 
             # Check if job is overdue
             overdue_threshold = timedelta(hours=CLEANUP_INTERVAL_HOURS * 2)
@@ -824,24 +830,32 @@ class OAuthCleanupJob:
             }
 
 
-# Singleton instance for application use
-oauth_cleanup_job = OAuthCleanupJob()
+# Lazy singleton instance for application use
+_oauth_cleanup_job = None
+
+
+def _get_oauth_cleanup_job():
+    """Get or create the OAuth cleanup job singleton."""
+    global _oauth_cleanup_job
+    if _oauth_cleanup_job is None:
+        _oauth_cleanup_job = OAuthCleanupJob()
+    return _oauth_cleanup_job
 
 
 # Convenience functions for easy import
 async def run_oauth_cleanup_job() -> dict:
     """Run a single iteration of the OAuth cleanup job."""
-    return await oauth_cleanup_job.run_once()
+    return await _get_oauth_cleanup_job().run_once()
 
 
 def get_oauth_cleanup_job_status() -> dict:
     """Get current OAuth cleanup job status."""
-    return oauth_cleanup_job.get_job_status()
+    return _get_oauth_cleanup_job().get_job_status()
 
 
 def oauth_cleanup_job_health() -> dict:
     """Check OAuth cleanup job health."""
-    return oauth_cleanup_job.health_check()
+    return _get_oauth_cleanup_job().health_check()
 
 
 # Background job scheduler

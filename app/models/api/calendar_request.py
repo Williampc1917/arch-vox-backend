@@ -35,9 +35,7 @@ class CreateEventRequest(BaseModel):
 class UpdateEventRequest(BaseModel):
     """Request for updating a calendar event."""
 
-    summary: str | None = Field(
-        None, min_length=1, max_length=200, description="New event title"
-    )
+    summary: str | None = Field(None, min_length=1, max_length=200, description="New event title")
     start_time: datetime | None = Field(None, description="New start time")
     end_time: datetime | None = Field(None, description="New end time")
     description: str | None = Field(None, max_length=1000, description="New description")
@@ -52,8 +50,6 @@ class GetEventsRequest(BaseModel):
     max_events: int = Field(
         default=10, ge=1, le=100, description="Maximum events to return (1-100)"
     )
-    calendar_ids: list[str] | None = Field(
-        default=None, description="Specific calendars to query"
-    )
+    calendar_ids: list[str] | None = Field(default=None, description="Specific calendars to query")
     include_all_day: bool = Field(default=True, description="Include all-day events")
     only_busy_events: bool = Field(default=False, description="Only events that show as busy")

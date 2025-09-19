@@ -6,7 +6,8 @@ takes care of gmail and calendar auth and connection status updates.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import timezone as UTC
 
 from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -205,11 +206,11 @@ class GmailConnectionService:
                     error_code="invalid_state",
                 )
 
-            # Exchange authorization code for tokens
+            # Exchange authorization code for tokens (sync call is fine here)
             token_response = exchange_oauth_code(authorization_code)
 
-            # Store encrypted tokens in database
-            store_success = store_oauth_tokens(user_id, token_response)
+            # ✅ FIX: Await async token storage
+            store_success = await store_oauth_tokens(user_id, token_response)
             if not store_success:
                 raise GmailConnectionError(
                     "Failed to store OAuth tokens",
@@ -291,7 +292,7 @@ class GmailConnectionService:
                 )
 
             # Get OAuth tokens
-            tokens = get_oauth_tokens(user_id)
+            tokens = await get_oauth_tokens(user_id)
 
             if not tokens:
                 # User marked as connected but no tokens - inconsistent state
@@ -346,7 +347,7 @@ class GmailConnectionService:
             logger.info("Disconnecting Gmail for user", user_id=user_id)
 
             # Revoke tokens with Google and delete from database
-            revoke_success = revoke_oauth_tokens(user_id)
+            revoke_success = await revoke_oauth_tokens(user_id)
 
             # Update user status regardless of revocation result
             # (local disconnection should succeed even if remote revocation fails)
@@ -388,8 +389,8 @@ class GmailConnectionService:
         try:
             logger.info("Refreshing Gmail connection", user_id=user_id)
 
-            # Attempt token refresh
-            refreshed_tokens = refresh_oauth_tokens(user_id)
+            # ✅ FIX: Await the async function
+            refreshed_tokens = await refresh_oauth_tokens(user_id)
 
             if refreshed_tokens:
                 logger.info(
@@ -407,8 +408,6 @@ class GmailConnectionService:
                     "Gmail connection refresh failed - tokens not found or refresh failed",
                     user_id=user_id,
                 )
-
-                # Update user status to disconnected
                 await self._update_user_gmail_status(user_id, connected=False)
 
                 raise GmailConnectionError(
@@ -419,10 +418,10 @@ class GmailConnectionService:
 
         except TokenServiceError as e:
             logger.error(
-                "Token service error during connection refresh", user_id=user_id, error=str(e)
+                "Token service error during connection refresh",
+                user_id=user_id,
+                error=str(e),
             )
-
-            # Update user status if refresh failed permanently
             if not getattr(e, "recoverable", True):
                 await self._update_user_gmail_status(user_id, connected=False)
 
@@ -723,7 +722,7 @@ class GmailConnectionService:
 
     def health_check(self) -> dict[str, any]:
         """
-        Check Gmail connection service health.
+        Check Gmail connection service health (sync version).
 
         Returns:
             dict: Health status and metrics
@@ -735,55 +734,25 @@ class GmailConnectionService:
                 "database_connectivity": "unknown",
             }
 
-            # Test database connectivity - FIX: Use asyncio.run for async method
+            # Test database pool availability (sync check)
             try:
-                metrics = asyncio.run(self.get_connection_metrics())
-                if metrics.get("healthy", False):
-                    health_data["database_connectivity"] = "ok"
-                    health_data.update(metrics)
+                from app.db.pool import db_pool
+                
+                if db_pool._initialized:
+                    health_data["database_connectivity"] = "pool_initialized"
                 else:
-                    health_data["database_connectivity"] = "error"
+                    health_data["database_connectivity"] = "pool_not_initialized"
                     health_data["healthy"] = False
+                    
             except Exception as e:
                 health_data["database_connectivity"] = f"error: {str(e)}"
                 health_data["healthy"] = False
 
-            # Test dependent services - simpler approach without event loop conflicts
+            # Test dependent services (sync checks only)
             try:
                 from app.services.google_oauth_service import google_oauth_health
-                from app.services.oauth_state_service import oauth_state_health
-                from app.services.token_service import token_service_health
 
-                # Call async health checks individually to avoid event loop conflicts
-                try:
-                    oauth_state_result = asyncio.run(oauth_state_health())
-                    if isinstance(oauth_state_result, dict):
-                        health_data["oauth_state_service"] = oauth_state_result.get(
-                            "healthy", False
-                        )
-                    else:
-                        health_data["oauth_state_service"] = False
-                        health_data["oauth_state_error"] = (
-                            f"Unexpected result type: {type(oauth_state_result)}"
-                        )
-                except Exception as e:
-                    health_data["oauth_state_service"] = False
-                    health_data["oauth_state_error"] = str(e)
-
-                try:
-                    token_service_result = asyncio.run(token_service_health())
-                    if isinstance(token_service_result, dict):
-                        health_data["token_service"] = token_service_result.get("healthy", False)
-                    else:
-                        health_data["token_service"] = False
-                        health_data["token_service_error"] = (
-                            f"Unexpected result type: {type(token_service_result)}"
-                        )
-                except Exception as e:
-                    health_data["token_service"] = False
-                    health_data["token_service_error"] = str(e)
-
-                # Sync health check
+                # Only call sync health check
                 try:
                     google_oauth_result = google_oauth_health()
                     if isinstance(google_oauth_result, dict):
@@ -796,14 +765,17 @@ class GmailConnectionService:
                     health_data["google_oauth_service"] = False
                     health_data["google_oauth_error"] = str(e)
 
-                # Overall health depends on all services
-                if not all(
-                    [
-                        health_data["oauth_state_service"],
-                        health_data["google_oauth_service"],
-                        health_data["token_service"],
-                    ]
-                ):
+                # For async services, just check if they're importable
+                try:
+                    from app.services.oauth_state_service import oauth_state_health
+                    from app.services.token_service import token_service_health
+                    
+                    health_data["oauth_state_service"] = "importable"
+                    health_data["token_service"] = "importable"
+                except ImportError as e:
+                    health_data["oauth_state_service"] = False
+                    health_data["token_service"] = False
+                    health_data["import_error"] = str(e)
                     health_data["healthy"] = False
 
             except Exception as e:
@@ -814,6 +786,96 @@ class GmailConnectionService:
 
         except Exception as e:
             logger.error("Gmail connection service health check failed", error=str(e))
+            return {
+                "healthy": False,
+                "service": "gmail_connection",
+                "error": str(e),
+            }
+
+    async def async_health_check(self) -> dict[str, any]:
+        """
+        Comprehensive async health check with full service testing.
+
+        Returns:
+            dict: Complete health status and metrics
+        """
+        try:
+            health_data = {
+                "healthy": True,
+                "service": "gmail_connection",
+            }
+
+            # Test database connectivity with actual query
+            try:
+                metrics = await self.get_connection_metrics()
+                if metrics.get("healthy", False):
+                    health_data["database_connectivity"] = "ok"
+                    health_data.update(metrics)
+                else:
+                    health_data["database_connectivity"] = "error"
+                    health_data["healthy"] = False
+            except Exception as e:
+                health_data["database_connectivity"] = f"error: {str(e)}"
+                health_data["healthy"] = False
+
+            # Test dependent services with proper async calls
+            try:
+                from app.services.google_oauth_service import google_oauth_health
+                from app.services.oauth_state_service import oauth_state_health
+                from app.services.token_service import token_service_health
+
+                # Call async health checks properly
+                try:
+                    oauth_state_result = await oauth_state_health()
+                    if isinstance(oauth_state_result, dict):
+                        health_data["oauth_state_service"] = oauth_state_result.get("healthy", False)
+                    else:
+                        health_data["oauth_state_service"] = False
+                        health_data["oauth_state_error"] = f"Unexpected result type: {type(oauth_state_result)}"
+                except Exception as e:
+                    health_data["oauth_state_service"] = False
+                    health_data["oauth_state_error"] = str(e)
+
+                try:
+                    token_service_result = await token_service_health()
+                    if isinstance(token_service_result, dict):
+                        health_data["token_service"] = token_service_result.get("healthy", False)
+                    else:
+                        health_data["token_service"] = False
+                        health_data["token_service_error"] = f"Unexpected result type: {type(token_service_result)}"
+                except Exception as e:
+                    health_data["token_service"] = False
+                    health_data["token_service_error"] = str(e)
+
+                # Sync health check
+                try:
+                    google_oauth_result = google_oauth_health()
+                    if isinstance(google_oauth_result, dict):
+                        health_data["google_oauth_service"] = google_oauth_result.get("healthy", False)
+                    else:
+                        health_data["google_oauth_service"] = False
+                except Exception as e:
+                    health_data["google_oauth_service"] = False
+                    health_data["google_oauth_error"] = str(e)
+
+                # Overall health depends on all services
+                service_checks = [
+                    health_data.get("oauth_state_service", False),
+                    health_data.get("google_oauth_service", False),
+                    health_data.get("token_service", False),
+                ]
+                
+                if not all(isinstance(check, bool) and check for check in service_checks):
+                    health_data["healthy"] = False
+
+            except Exception as e:
+                health_data["dependency_check"] = f"error: {str(e)}"
+                health_data["healthy"] = False
+
+            return health_data
+
+        except Exception as e:
+            logger.error("Gmail connection async health check failed", error=str(e))
             return {
                 "healthy": False,
                 "service": "gmail_connection",
@@ -854,3 +916,7 @@ async def refresh_gmail_connection(user_id: str) -> bool:
 def gmail_connection_health() -> dict[str, any]:
     """Check Gmail connection service health."""
     return gmail_connection_service.health_check()
+
+async def gmail_connection_async_health() -> dict[str, any]:
+    """Check Gmail connection service health (async version)."""
+    return await gmail_connection_service.async_health_check()
