@@ -8,6 +8,7 @@ takes care of gmail and calendar auth and connection status updates.
 import asyncio
 from datetime import datetime, timedelta
 from datetime import timezone as UTC
+import asyncio
 
 from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -113,7 +114,7 @@ class GmailConnectionService:
         self._config_validated = True
         logger.info("Gmail connection service initialized successfully")
 
-    def initiate_oauth_flow(self, user_id: str) -> tuple[str, str]:
+    async def initiate_oauth_flow(self, user_id: str) -> tuple[str, str]:
         """
         Initiate OAuth flow for Gmail connection.
 
@@ -132,7 +133,7 @@ class GmailConnectionService:
             logger.info("Initiating Gmail OAuth flow", user_id=user_id)
 
             # Generate secure state parameter
-            state = generate_oauth_state(user_id)
+            state = await generate_oauth_state(user_id)
 
             # Generate Google OAuth URL
             oauth_url = generate_google_oauth_url(state)
@@ -194,7 +195,7 @@ class GmailConnectionService:
             )
 
             # Validate state parameter (CSRF protection)
-            if not validate_oauth_state(state, user_id):
+            if not await validate_oauth_state(state, user_id):
                 logger.warning(
                     "OAuth state validation failed",
                     user_id=user_id,
@@ -888,9 +889,9 @@ gmail_connection_service = GmailConnectionService()
 
 
 # Convenience functions for easy import
-def start_gmail_oauth(user_id: str) -> tuple[str, str]:
+async def start_gmail_oauth(user_id: str) -> tuple[str, str]:
     """Start Gmail OAuth flow."""
-    return gmail_connection_service.initiate_oauth_flow(user_id)
+    return await gmail_connection_service.initiate_oauth_flow(user_id)
 
 
 async def complete_gmail_oauth(user_id: str, code: str, state: str) -> bool:

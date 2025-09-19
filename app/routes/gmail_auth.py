@@ -22,6 +22,7 @@ from app.services.gmail_auth_service import (
     refresh_gmail_connection,
     start_gmail_oauth,
 )
+from app.services.google_oauth_service import GMAIL_CALENDAR_SCOPES
 
 logger = get_logger(__name__)
 
@@ -54,9 +55,9 @@ async def get_oauth_url(claims: dict = Depends(auth_dependency)):
         logger.info("Generating Gmail OAuth URL", user_id=user_id)
 
         # Generate OAuth URL and state parameter
-        oauth_url, state = start_gmail_oauth(user_id)
+        oauth_url, state = await start_gmail_oauth(user_id)
 
-        response = GmailAuthURLResponse(auth_url=oauth_url, state=state)
+        response = GmailAuthURLResponse(auth_url=oauth_url, state=state, total_scopes=6)
 
         logger.info(
             "Gmail OAuth URL generated successfully",
