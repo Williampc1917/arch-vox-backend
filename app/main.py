@@ -4,7 +4,6 @@
 Updated main.py with database pool lifecycle management.
 """
 
-import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -43,16 +42,18 @@ async def lifespan(app: FastAPI):
 
         logger.info("All services initialized successfully", services=startup_tasks)
 
-        # 🔹 Start background jobs AFTER database pool is initialized
-        logger.info("Starting background jobs (cleanup + token refresh)")
+        # 🔹 TEMPORARILY DISABLED - OAuth cleanup was causing race conditions
+        # logger.info("Starting background jobs (cleanup + token refresh)")
 
         # Import jobs here, after database pool is ready
-        from app.jobs.oauth_cleanup_job import start_oauth_cleanup_scheduler
-        from app.jobs.token_refresh_job import start_token_refresh_scheduler
+        # from app.jobs.oauth_cleanup_job import start_oauth_cleanup_scheduler
+        # from app.jobs.token_refresh_job import start_token_refresh_scheduler
 
         # Start background jobs
-        asyncio.create_task(start_oauth_cleanup_scheduler())  # runs every 6h
-        asyncio.create_task(start_token_refresh_scheduler())  # runs every 10m
+        # asyncio.create_task(start_oauth_cleanup_scheduler())  # runs every 6h
+        # asyncio.create_task(start_token_refresh_scheduler())  # runs every 10m
+
+        logger.info("Background jobs disabled - OAuth cleanup caused race conditions")
 
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e), completed_tasks=startup_tasks)

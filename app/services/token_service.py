@@ -4,8 +4,8 @@ Handles encryption, storage, expiration, refresh, and cleanup of OAuth tokens.
 REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 """
 
-from datetime import UTC, datetime, timedelta
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -24,19 +24,21 @@ from app.services.google_oauth_service import (
 
 logger = get_logger(__name__)
 
+
 async def retry_with_backoff(func, *args, retries=3, base_delay=1, **kwargs):
     """
     Retry a blocking function with exponential backoff.
     Uses asyncio.to_thread to avoid blocking the event loop.
     """
     import random
+
     for attempt in range(retries):
         try:
             return await asyncio.to_thread(func, *args, **kwargs)
         except Exception as e:
             if attempt == retries - 1:
                 raise  # Give up after last attempt
-            delay = base_delay * (2 ** attempt) + random.uniform(0, 0.3)
+            delay = base_delay * (2**attempt) + random.uniform(0, 0.3)
             logger.warning(
                 "Retrying after failure",
                 func=func.__name__,
@@ -45,6 +47,7 @@ async def retry_with_backoff(func, *args, retries=3, base_delay=1, **kwargs):
                 error=str(e),
             )
             await asyncio.sleep(delay)
+
 
 # Token management constants
 TOKEN_REFRESH_BUFFER_MINUTES = 15  # Refresh tokens expiring within 15 minutes
@@ -391,13 +394,13 @@ class TokenService:
             # Call Google OAuth service to refresh with timeout + retry
             new_token_response = await asyncio.wait_for(
                 retry_with_backoff(
-                refresh_google_token,
-                current_tokens.refresh_token,
-                retries=3,       # up to 3 tries
-                base_delay=1     # 1s, 2s, 4s...
-            ),
-            timeout=10  # seconds per full refresh attempt
-)
+                    refresh_google_token,
+                    current_tokens.refresh_token,
+                    retries=3,  # up to 3 tries
+                    base_delay=1,  # 1s, 2s, 4s...
+                ),
+                timeout=10,  # seconds per full refresh attempt
+            )
 
             # Store new tokens
             success = await self.store_tokens(user_id, new_token_response, provider)
@@ -525,10 +528,7 @@ class TokenService:
             revoke_success = True
             if tokens.access_token:
 
-                revoke_success = await asyncio.to_thread(
-                revoke_google_token,
-                tokens.access_token
-                )
+                revoke_success = await asyncio.to_thread(revoke_google_token, tokens.access_token)
 
                 if not revoke_success:
                     logger.warning(

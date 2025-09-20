@@ -6,7 +6,7 @@ REFACTORED: Now follows the same patterns as other services for consistency.
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.infrastructure.observability.logging import get_logger
 from app.services.gmail_auth_service import GmailConnectionError, gmail_connection_service
@@ -39,7 +39,7 @@ class TokenRefreshMetrics:
 
     def reset(self):
         """Reset all metrics for new job run."""
-        self.start_time = datetime.now(timezone.utc)
+        self.start_time = datetime.now(UTC)
         self.users_processed = 0
         self.tokens_refreshed = 0
         self.refresh_failures = 0
@@ -72,7 +72,7 @@ class TokenRefreshMetrics:
             "user_id": user_id,
             "error": error,
             "disconnected": disconnected,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         self.errors.append(error_record)
 
@@ -93,7 +93,7 @@ class TokenRefreshMetrics:
             "user_id": user_id,
             "error": error,
             "error_type": "processing",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         self.errors.append(error_record)
 
@@ -103,7 +103,7 @@ class TokenRefreshMetrics:
 
     def finalize(self):
         """Finalize metrics and calculate totals."""
-        self.total_duration_seconds = (datetime.now(timezone.utc) - self.start_time).total_seconds()
+        self.total_duration_seconds = (datetime.now(UTC) - self.start_time).total_seconds()
 
     def to_dict(self) -> dict:
         """Convert metrics to dictionary for logging."""
@@ -215,7 +215,7 @@ class TokenRefreshJob:
 
             # Finalize and log metrics
             self.job_metrics.finalize()
-            self.last_run_time = datetime.now(timezone.utc)
+            self.last_run_time = datetime.now(UTC)
 
             metrics = self.job_metrics.to_dict()
 
@@ -434,7 +434,7 @@ class TokenRefreshJob:
             Dict: Health status and configuration
         """
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             # Check if job is overdue (hasn't run in 2x the interval)
             overdue_threshold = timedelta(minutes=JOB_INTERVAL_MINUTES * 2)

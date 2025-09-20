@@ -166,7 +166,7 @@ async def execute_transaction(queries_and_params: list[tuple]) -> bool:
         ])
     """
     try:
-        async with get_db_transaction() as conn:
+        async with await get_db_transaction() as conn:
             for query, params in queries_and_params:
                 await conn.execute(query, params)  # Fixed: removed *params
 

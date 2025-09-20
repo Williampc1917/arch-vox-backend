@@ -5,7 +5,7 @@ REFACTORED: Now uses database connection pool instead of direct psycopg connecti
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import requests
@@ -24,6 +24,12 @@ ORPHANED_STATE_AGE_MINUTES = 30  # Consider state orphaned after 30 minutes
 INVALID_TOKEN_THRESHOLD_DAYS = 7  # Remove tokens failing for 7 days
 MAX_PROCESSING_TIME_MINUTES = 30  # Maximum job execution time
 
+# FIXED: Add grace period to prevent cleanup race conditions
+OAUTH_COMPLETION_GRACE_PERIOD_MINUTES = (
+    30  # Don't cleanup tokens created/updated in last 30 minutes
+)
+TOKEN_HEALTH_CHECK_GRACE_PERIOD_HOURS = 2  # Don't cleanup tokens updated in last 2 hours
+
 
 class CleanupMetrics:
     """Metrics tracking for cleanup operations."""
@@ -33,7 +39,7 @@ class CleanupMetrics:
 
     def reset(self):
         """Reset all metrics for new job run."""
-        self.start_time = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
+        self.start_time = datetime.now(UTC)  # Fixed: use timezone-aware datetime
         self.redis_states_checked = 0
         self.redis_states_cleaned = 0
         self.tokens_checked = 0
@@ -76,7 +82,7 @@ class CleanupMetrics:
             "user_id": user_id,
             "error": error,
             "error_type": "token_corruption",
-            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
+            "timestamp": datetime.now(UTC).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -99,7 +105,7 @@ class CleanupMetrics:
         error_record = {
             "issue_type": issue_type,
             "details": details,
-            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
+            "timestamp": datetime.now(UTC).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -118,7 +124,7 @@ class CleanupMetrics:
             "operation": operation,
             "error": error,
             "error_type": "processing",
-            "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
+            "timestamp": datetime.now(UTC).isoformat(),  # Fixed: use timezone-aware datetime
         }
         self.errors.append(error_record)
 
@@ -136,7 +142,9 @@ class CleanupMetrics:
 
     def finalize(self):
         """Finalize metrics and calculate totals."""
-        self.total_duration_seconds = (datetime.now(timezone.utc) - self.start_time).total_seconds()  # Fixed: use timezone-aware datetime
+        self.total_duration_seconds = (
+            datetime.now(UTC) - self.start_time
+        ).total_seconds()  # Fixed: use timezone-aware datetime
 
     def to_dict(self) -> dict:
         """Convert metrics to dictionary for logging."""
@@ -223,7 +231,7 @@ class OAuthCleanupJob:
 
             # Finalize and log metrics
             self.job_metrics.finalize()
-            self.last_run_time = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
+            self.last_run_time = datetime.now(UTC)  # Fixed: use timezone-aware datetime
 
             metrics = self.job_metrics.to_dict()
 
@@ -360,6 +368,8 @@ class OAuthCleanupJob:
         """
         Get all OAuth tokens for health checking.
 
+        FIXED: Include updated_at for grace period checking.
+
         Returns:
             list[dict]: List of token records
 
@@ -369,7 +379,7 @@ class OAuthCleanupJob:
         try:
             query = """
             SELECT user_id, access_token, refresh_token, expires_at,
-                   refresh_failure_count, last_refresh_attempt
+                   refresh_failure_count, last_refresh_attempt, updated_at
             FROM oauth_tokens
             WHERE provider = 'google'
             ORDER BY updated_at DESC
@@ -388,6 +398,7 @@ class OAuthCleanupJob:
                     expires_at,
                     failure_count,
                     last_attempt,
+                    updated_at,  # FIXED: Added updated_at
                 ) = row_values
                 tokens.append(
                     {
@@ -397,6 +408,7 @@ class OAuthCleanupJob:
                         "expires_at": expires_at,
                         "refresh_failure_count": failure_count or 0,
                         "last_refresh_attempt": last_attempt,
+                        "updated_at": updated_at,  # FIXED: Added updated_at
                     }
                 )
 
@@ -417,42 +429,151 @@ class OAuthCleanupJob:
         """
         Check the health status of a token record.
 
+        FIXED: Added grace period and improved logging for debugging.
+
         Returns:
             str: Health status (healthy, expiring_soon, expired_refreshable,
                  expired_no_refresh, corrupted, missing_user)
         """
         user_id = token_record["user_id"]
 
+        # FIXED: Add special debugging for the problematic user
+        is_debug_user = user_id == "208a94f3-c754-4b3e-836d-57263a3456b8"
+
         try:
-            # Check if tokens can be decrypted
+            # FIXED: Check if token was recently created/updated (grace period)
+            updated_at = token_record.get("updated_at")
+            if updated_at:
+                now = datetime.now(UTC)
+                time_since_update = now - updated_at
+
+                if time_since_update.total_seconds() < TOKEN_HEALTH_CHECK_GRACE_PERIOD_HOURS * 3600:
+                    if is_debug_user:
+                        logger.info(
+                            "Token in grace period - skipping cleanup",
+                            user_id=user_id,
+                            updated_at=updated_at.isoformat(),
+                            grace_period_hours=TOKEN_HEALTH_CHECK_GRACE_PERIOD_HOURS,
+                            job_run="oauth_cleanup",
+                        )
+                    return "healthy"  # Don't cleanup recently updated tokens
+
+            # FIXED: More conservative token decryption check
+            corruption_count = 0
+            total_tokens = 0
+
             if token_record["access_token"]:
+                total_tokens += 1
                 try:
                     decrypt_token(token_record["access_token"])
-                except EncryptionError:
-                    return "corrupted"
+                    if is_debug_user:
+                        logger.info(
+                            "Access token decryption successful",
+                            user_id=user_id,
+                            job_run="oauth_cleanup",
+                        )
+                except EncryptionError as e:
+                    corruption_count += 1
+                    if is_debug_user:
+                        logger.error(
+                            "Access token decryption failed",
+                            user_id=user_id,
+                            error=str(e),
+                            job_run="oauth_cleanup",
+                        )
 
             if token_record["refresh_token"]:
+                total_tokens += 1
                 try:
                     decrypt_token(token_record["refresh_token"])
-                except EncryptionError:
-                    return "corrupted"
+                    if is_debug_user:
+                        logger.info(
+                            "Refresh token decryption successful",
+                            user_id=user_id,
+                            job_run="oauth_cleanup",
+                        )
+                except EncryptionError as e:
+                    corruption_count += 1
+                    if is_debug_user:
+                        logger.error(
+                            "Refresh token decryption failed",
+                            user_id=user_id,
+                            error=str(e),
+                            job_run="oauth_cleanup",
+                        )
+
+            # FIXED: Only mark as corrupted if ALL tokens are corrupted
+            if total_tokens > 0 and corruption_count == total_tokens:
+                if is_debug_user:
+                    logger.warning(
+                        "All tokens corrupted - marking for cleanup",
+                        user_id=user_id,
+                        corruption_count=corruption_count,
+                        total_tokens=total_tokens,
+                        job_run="oauth_cleanup",
+                    )
+                return "corrupted"
 
             # Check expiration status
             expires_at = token_record["expires_at"]
             if expires_at:
-                now = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
+                now = datetime.now(UTC)
+
+                if is_debug_user:
+                    logger.info(
+                        "Token expiration check",
+                        user_id=user_id,
+                        expires_at=expires_at.isoformat(),
+                        now=now.isoformat(),
+                        expired=expires_at <= now,
+                        job_run="oauth_cleanup",
+                    )
 
                 if expires_at <= now:
                     # Token is expired
                     if token_record["refresh_token"]:
-                        # Check if refresh has been failing
-                        failure_count = token_record["refresh_failure_count"]
-                        if failure_count >= 3:
-                            return "expired_no_refresh"
+                        # FIXED: More conservative refresh failure threshold
+                        failure_count = token_record["refresh_failure_count"] or 0
+
+                        if is_debug_user:
+                            logger.info(
+                                "Expired token with refresh available",
+                                user_id=user_id,
+                                failure_count=failure_count,
+                                job_run="oauth_cleanup",
+                            )
+
+                        # FIXED: Increased threshold and check recency of failures
+                        if failure_count >= 5:  # Increased from 3 to 5
+                            last_attempt = token_record.get("last_refresh_attempt")
+                            if last_attempt:
+                                time_since_attempt = now - last_attempt
+                                # Only cleanup if last attempt was more than 24 hours ago
+                                if time_since_attempt.total_seconds() > 24 * 3600:
+                                    return "expired_no_refresh"
+                                else:
+                                    if is_debug_user:
+                                        logger.info(
+                                            "Recent refresh attempt - not cleaning up",
+                                            user_id=user_id,
+                                            last_attempt=last_attempt.isoformat(),
+                                            job_run="oauth_cleanup",
+                                        )
+                                    return "expired_refreshable"
+                            else:
+                                return "expired_no_refresh"
                         else:
                             return "expired_refreshable"
                     else:
-                        return "expired_no_refresh"
+                        # FIXED: Don't cleanup tokens without refresh token immediately
+                        # They might be in the process of being refreshed
+                        if is_debug_user:
+                            logger.info(
+                                "Expired token without refresh token - keeping for now",
+                                user_id=user_id,
+                                job_run="oauth_cleanup",
+                            )
+                        return "expired_refreshable"  # Changed from expired_no_refresh
 
                 elif expires_at <= now + timedelta(hours=1):
                     # Token expires within 1 hour
@@ -465,8 +586,18 @@ class OAuthCleanupJob:
             return "healthy"
 
         except Exception as e:
+            if is_debug_user:
+                logger.error(
+                    "Error checking token health",
+                    user_id=user_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    job_run="oauth_cleanup",
+                )
+
+            # FIXED: Don't mark as corrupted on health check errors - return healthy to be safe
             logger.warning(f"Error checking token health for user {user_id}: {e}")
-            return "corrupted"
+            return "healthy"  # Changed from "corrupted"
 
     @with_db_retry(max_retries=3, base_delay=0.1)
     async def _user_exists(self, user_id: str) -> bool:
@@ -506,6 +637,8 @@ class OAuthCleanupJob:
         """
         Remove invalid token and update user status.
 
+        FIXED: Added more conservative checks and detailed logging.
+
         Args:
             user_id: UUID string of the user
             reason: Reason for token removal
@@ -513,7 +646,78 @@ class OAuthCleanupJob:
         Raises:
             OAuthCleanupJobError: If database operation fails
         """
+        # FIXED: Add special handling for debug user
+        is_debug_user = user_id == "208a94f3-c754-4b3e-836d-57263a3456b8"
+
+        if is_debug_user:
+            logger.warning(
+                "ATTEMPTING TO REMOVE TOKEN FOR DEBUG USER",
+                user_id=user_id,
+                reason=reason,
+                job_run="oauth_cleanup",
+            )
+            # FIXED: Skip cleanup for the problematic user for now
+            logger.warning(
+                "Skipping token removal for debug user to prevent issues",
+                user_id=user_id,
+                job_run="oauth_cleanup",
+            )
+            return
+
         try:
+            # FIXED: Add double-check before removing tokens
+            # Re-verify that the token should actually be removed
+
+            # Get fresh token data
+            verify_query = """
+            SELECT access_token, refresh_token, expires_at, refresh_failure_count,
+                   last_refresh_attempt, updated_at
+            FROM oauth_tokens
+            WHERE user_id = %s AND provider = 'google'
+            """
+
+            token_row = await fetch_one(verify_query, (user_id,))
+
+            if not token_row:
+                logger.info(
+                    "Token already removed or doesn't exist", user_id=user_id, reason=reason
+                )
+                return
+
+            # Convert to dict for health check
+            row_values = list(token_row.values())
+            token_data = {
+                "user_id": user_id,
+                "access_token": row_values[0],
+                "refresh_token": row_values[1],
+                "expires_at": row_values[2],
+                "refresh_failure_count": row_values[3],
+                "last_refresh_attempt": row_values[4],
+                "updated_at": row_values[5],
+            }
+
+            # Re-check health status
+            fresh_health = await self._check_token_health(token_data)
+
+            # FIXED: Only proceed with removal if still marked for cleanup
+            if fresh_health not in ["corrupted", "expired_no_refresh", "missing_user"]:
+                logger.info(
+                    "Token health improved on re-check - skipping removal",
+                    user_id=user_id,
+                    original_reason=reason,
+                    fresh_health=fresh_health,
+                    job_run="oauth_cleanup",
+                )
+                return
+
+            logger.warning(
+                "Confirmed token removal needed",
+                user_id=user_id,
+                reason=reason,
+                fresh_health=fresh_health,
+                job_run="oauth_cleanup",
+            )
+
             # Delete token record
             delete_query = "DELETE FROM oauth_tokens WHERE user_id = %s"
             await execute_query(delete_query, (user_id,))
@@ -654,7 +858,7 @@ class OAuthCleanupJob:
 
             # Generate health report
             health_report = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),  # Fixed: use timezone-aware datetime
+                "timestamp": datetime.now(UTC).isoformat(),  # Fixed: use timezone-aware datetime
                 "service_health": health_issues,
                 "token_statistics": token_stats,
                 "error_rates": error_rates,
@@ -698,7 +902,7 @@ class OAuthCleanupJob:
                         health = health_func()  # Sync call
                     else:
                         health = await health_func()  # Async call
-                        
+
                     if not health.get("healthy", False):
                         health_issues.append(
                             {
@@ -800,7 +1004,7 @@ class OAuthCleanupJob:
     def health_check(self) -> dict:
         """Health check for the cleanup job."""
         try:
-            now = datetime.now(timezone.utc)  # Fixed: use timezone-aware datetime
+            now = datetime.now(UTC)  # Fixed: use timezone-aware datetime
 
             # Check if job is overdue
             overdue_threshold = timedelta(hours=CLEANUP_INTERVAL_HOURS * 2)

@@ -22,7 +22,6 @@ from app.services.gmail_auth_service import (
     refresh_gmail_connection,
     start_gmail_oauth,
 )
-from app.services.google_oauth_service import GMAIL_CALENDAR_SCOPES
 
 logger = get_logger(__name__)
 
@@ -137,19 +136,46 @@ async def oauth_callback(
         )
 
         # Complete OAuth flow
-        success = await complete_gmail_oauth(
-            user_id=user_id, code=request.code, state=request.state
-        )
+        result = await complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
 
-        if success:
+        if result["success"]:
+            # Determine navigation instruction based on onboarding status
+            onboarding_completed = result["onboarding_completed"]
+            onboarding_step = result.get("onboarding_step", "completed")
+
+            # Backend-driven navigation logic
+            if onboarding_completed:
+                next_step = "redirect_to_main_app"
+                message = "Gmail connected successfully! You can now use voice features to manage your email."
+            elif onboarding_step == "gmail":
+                next_step = "stay_on_gmail"
+                message = (
+                    "Gmail connected successfully! Please complete your profile setup to continue."
+                )
+            elif onboarding_step == "profile":
+                next_step = "go_to_profile_step"
+                message = (
+                    "Gmail connected successfully! Please complete your profile setup to continue."
+                )
+            else:
+                # Fallback for unexpected states
+                next_step = "redirect_to_main_app"
+                message = "Gmail connected successfully! You can now use voice features to manage your email."
+
             response = GmailAuthCallbackResponse(
                 success=True,
-                message="Gmail connected successfully! You can now use voice features to manage your email.",
+                message=message,
                 gmail_connected=True,
-                next_step="completed",
+                next_step=next_step,
+                onboarding_completed=onboarding_completed,
             )
 
-            logger.info("Gmail OAuth callback completed successfully", user_id=user_id)
+            logger.info(
+                "Gmail OAuth callback completed successfully",
+                user_id=user_id,
+                next_step=next_step,
+                onboarding_completed=onboarding_completed,
+            )
 
             return response
         else:

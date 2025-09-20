@@ -200,4 +200,9 @@ class GmailAuthCallbackResponse(BaseModel):
     success: bool
     message: str
     gmail_connected: bool
-    next_step: Literal["completed"] | None = None
+    next_step: (
+        Literal["stay_on_gmail", "redirect_to_main_app", "go_to_profile_step", "completed"] | None
+    ) = None
+    onboarding_completed: bool = Field(
+        default=False, description="Whether onboarding is now complete"
+    )

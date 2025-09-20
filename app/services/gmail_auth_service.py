@@ -5,10 +5,7 @@ REFACTORED: Now uses database connection pool instead of direct psycopg connecti
 takes care of gmail and calendar auth and connection status updates.
 """
 
-import asyncio
-from datetime import datetime, timedelta
-from datetime import timezone as UTC
-import asyncio
+from datetime import datetime
 
 from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -28,7 +25,6 @@ from app.services.token_service import (
     get_oauth_tokens,
     refresh_oauth_tokens,
     revoke_oauth_tokens,
-    store_oauth_tokens,
 )
 
 logger = get_logger(__name__)
@@ -210,31 +206,38 @@ class GmailConnectionService:
             # Exchange authorization code for tokens (sync call is fine here)
             token_response = exchange_oauth_code(authorization_code)
 
-            # ✅ FIX: Await async token storage
-            store_success = await store_oauth_tokens(user_id, token_response)
-            if not store_success:
-                raise GmailConnectionError(
-                    "Failed to store OAuth tokens",
-                    user_id=user_id,
-                    error_code="token_storage_failed",
-                )
+            # ✅ FIX: Store tokens and update user status in single transaction
+            await self._complete_oauth_database_updates(user_id, token_response)
 
-            # Update user Gmail connection status
-            await self._update_user_gmail_status(user_id, connected=True)
+            # Fetch updated user profile to get onboarding status
+            from app.services.user_service import get_user_profile
 
-            # Check if Calendar permissions were also granted and update status
-            await self._update_calendar_status_if_granted(user_id, token_response.scope)
+            updated_profile = await get_user_profile(user_id)
+
+            if updated_profile:
+                onboarding_completed = updated_profile.onboarding_completed
+                onboarding_step = updated_profile.onboarding_step
+            else:
+                # Fallback - assume completed if we can't fetch profile
+                onboarding_completed = True
+                onboarding_step = "completed"
 
             logger.info(
                 "Gmail OAuth flow completed successfully",
                 user_id=user_id,
                 has_refresh_token=bool(token_response.refresh_token),
+                onboarding_completed=onboarding_completed,
+                onboarding_step=onboarding_step,
                 expires_at=(
                     token_response.expires_at.isoformat() if token_response.expires_at else None
                 ),
             )
 
-            return True
+            return {
+                "success": True,
+                "onboarding_completed": onboarding_completed,
+                "onboarding_step": onboarding_step,
+            }
 
         except GmailConnectionError:
             raise  # Re-raise Gmail connection errors
@@ -738,13 +741,13 @@ class GmailConnectionService:
             # Test database pool availability (sync check)
             try:
                 from app.db.pool import db_pool
-                
+
                 if db_pool._initialized:
                     health_data["database_connectivity"] = "pool_initialized"
                 else:
                     health_data["database_connectivity"] = "pool_not_initialized"
                     health_data["healthy"] = False
-                    
+
             except Exception as e:
                 health_data["database_connectivity"] = f"error: {str(e)}"
                 health_data["healthy"] = False
@@ -770,7 +773,7 @@ class GmailConnectionService:
                 try:
                     from app.services.oauth_state_service import oauth_state_health
                     from app.services.token_service import token_service_health
-                    
+
                     health_data["oauth_state_service"] = "importable"
                     health_data["token_service"] = "importable"
                 except ImportError as e:
@@ -829,10 +832,14 @@ class GmailConnectionService:
                 try:
                     oauth_state_result = await oauth_state_health()
                     if isinstance(oauth_state_result, dict):
-                        health_data["oauth_state_service"] = oauth_state_result.get("healthy", False)
+                        health_data["oauth_state_service"] = oauth_state_result.get(
+                            "healthy", False
+                        )
                     else:
                         health_data["oauth_state_service"] = False
-                        health_data["oauth_state_error"] = f"Unexpected result type: {type(oauth_state_result)}"
+                        health_data["oauth_state_error"] = (
+                            f"Unexpected result type: {type(oauth_state_result)}"
+                        )
                 except Exception as e:
                     health_data["oauth_state_service"] = False
                     health_data["oauth_state_error"] = str(e)
@@ -843,7 +850,9 @@ class GmailConnectionService:
                         health_data["token_service"] = token_service_result.get("healthy", False)
                     else:
                         health_data["token_service"] = False
-                        health_data["token_service_error"] = f"Unexpected result type: {type(token_service_result)}"
+                        health_data["token_service_error"] = (
+                            f"Unexpected result type: {type(token_service_result)}"
+                        )
                 except Exception as e:
                     health_data["token_service"] = False
                     health_data["token_service_error"] = str(e)
@@ -852,7 +861,9 @@ class GmailConnectionService:
                 try:
                     google_oauth_result = google_oauth_health()
                     if isinstance(google_oauth_result, dict):
-                        health_data["google_oauth_service"] = google_oauth_result.get("healthy", False)
+                        health_data["google_oauth_service"] = google_oauth_result.get(
+                            "healthy", False
+                        )
                     else:
                         health_data["google_oauth_service"] = False
                 except Exception as e:
@@ -865,7 +876,7 @@ class GmailConnectionService:
                     health_data.get("google_oauth_service", False),
                     health_data.get("token_service", False),
                 ]
-                
+
                 if not all(isinstance(check, bool) and check for check in service_checks):
                     health_data["healthy"] = False
 
@@ -883,6 +894,125 @@ class GmailConnectionService:
                 "error": str(e),
             }
 
+    @with_db_retry(max_retries=3, base_delay=0.1)
+    async def _complete_oauth_database_updates(self, user_id: str, token_response) -> bool:
+        """
+        Complete OAuth database updates in a single transaction to prevent race conditions.
+
+        Args:
+            user_id: UUID string of the user
+            token_response: TokenResponse from OAuth flow
+
+        Returns:
+            bool: True if all updates successful
+
+        Raises:
+            GmailConnectionError: If transaction fails
+        """
+        try:
+            # Import here to avoid circular imports
+            from app.db.helpers import execute_transaction
+            from app.services.encryption_service import encrypt_oauth_tokens
+
+            # Encrypt tokens
+            encrypted_access, encrypted_refresh = encrypt_oauth_tokens(
+                access_token=token_response.access_token, refresh_token=token_response.refresh_token
+            )
+
+            # Prepare all queries for single transaction
+            queries_and_params = [
+                # 1. Store/update OAuth tokens
+                (
+                    """
+                INSERT INTO oauth_tokens (
+                    user_id, provider, access_token, refresh_token,
+                    scope, expires_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, NOW()
+                )
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    scope = EXCLUDED.scope,
+                    expires_at = EXCLUDED.expires_at,
+                    updated_at = NOW(),
+                    refresh_failure_count = 0,
+                    last_refresh_attempt = NULL
+                """,
+                    (
+                        user_id,
+                        "google",
+                        encrypted_access,
+                        encrypted_refresh,
+                        token_response.scope,
+                        token_response.expires_at,
+                    ),
+                ),
+                # 2. Update user Gmail connection status and onboarding
+                (
+                    """
+                UPDATE users
+                SET gmail_connected = %s,
+                    onboarding_step = CASE
+                        WHEN onboarding_step = 'profile' THEN 'gmail'
+                        WHEN onboarding_step = 'gmail' THEN 'completed'
+                        ELSE onboarding_step
+                    END,
+                    onboarding_completed = CASE
+                        WHEN onboarding_step = 'gmail' THEN true
+                        ELSE onboarding_completed
+                    END,
+                    updated_at = NOW()
+                WHERE id = %s AND is_active = true
+                """,
+                    (True, user_id),
+                ),
+                # 3. Check and update calendar status if granted
+                (
+                    """
+                UPDATE users
+                SET calendar_connected = %s,
+                    updated_at = NOW()
+                WHERE id = %s AND is_active = true
+                AND %s ~ 'calendar'
+                """,
+                    (True, user_id, token_response.scope),
+                ),
+            ]
+
+            # Execute all updates in single transaction
+            success = await execute_transaction(queries_and_params)
+
+            if success:
+                logger.info(
+                    "OAuth database updates completed in single transaction",
+                    user_id=user_id,
+                    token_stored=True,
+                    gmail_connected=True,
+                    calendar_scope_detected="calendar" in token_response.scope,
+                )
+                return True
+            else:
+                raise GmailConnectionError(
+                    "OAuth database transaction failed",
+                    user_id=user_id,
+                    error_code="transaction_failed",
+                )
+
+        except Exception as e:
+            logger.error(
+                "Error completing OAuth database updates",
+                user_id=user_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise GmailConnectionError(
+                f"OAuth database updates failed: {e}",
+                user_id=user_id,
+                error_code="database_update_failed",
+            ) from e
+
 
 # Singleton instance for application use
 gmail_connection_service = GmailConnectionService()
@@ -894,8 +1024,8 @@ async def start_gmail_oauth(user_id: str) -> tuple[str, str]:
     return await gmail_connection_service.initiate_oauth_flow(user_id)
 
 
-async def complete_gmail_oauth(user_id: str, code: str, state: str) -> bool:
-    """Complete Gmail OAuth flow."""
+async def complete_gmail_oauth(user_id: str, code: str, state: str) -> dict:
+    """Complete Gmail OAuth flow and return onboarding status."""
     return await gmail_connection_service.complete_oauth_flow(user_id, code, state)
 
 
@@ -917,6 +1047,7 @@ async def refresh_gmail_connection(user_id: str) -> bool:
 def gmail_connection_health() -> dict[str, any]:
     """Check Gmail connection service health."""
     return gmail_connection_service.health_check()
+
 
 async def gmail_connection_async_health() -> dict[str, any]:
     """Check Gmail connection service health (async version)."""

@@ -586,7 +586,7 @@ class CalendarConnectionService:
             # Note: This could be extended to track calendar-specific usage
             # For now, we'll rely on the oauth_tokens updated_at field
             query = """
-            UPDATE oauth_tokens 
+            UPDATE oauth_tokens
             SET updated_at = NOW()
             WHERE user_id = %s AND provider = 'google'
             """
