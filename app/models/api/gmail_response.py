@@ -229,7 +229,7 @@ class CombinedEmailCalendarResponse(BaseModel):
 
     gmail_status: dict[str, Any] = Field(..., description="Gmail connection status")
     calendar_status: dict[str, Any] = Field(..., description="Calendar connection status")
-    
+
     # Cross-service insights
     meeting_emails_today: int = Field(default=0, description="Emails about today's meetings")
     calendar_conflicts: list[dict[str, Any]] = Field(
@@ -245,8 +245,10 @@ class SmartTriageResponse(BaseModel):
 
     priority_emails: list[GmailMessageResponse] = Field(..., description="High priority emails")
     routine_emails: list[GmailMessageResponse] = Field(..., description="Routine emails")
-    newsletters_promotions: list[GmailMessageResponse] = Field(..., description="Newsletters/promos")
-    
+    newsletters_promotions: list[GmailMessageResponse] = Field(
+        ..., description="Newsletters/promos"
+    )
+
     # AI insights
     action_recommendations: list[dict[str, Any]] = Field(
         default_factory=list, description="AI-generated action recommendations"

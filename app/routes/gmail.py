@@ -9,22 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.auth.verify import auth_dependency
 from app.infrastructure.observability.logging import get_logger
 from app.models.api.gmail_request import (
-    CreateDraftRequest,
-    GetMessageRequest,
-    GetMessagesRequest,
-    ModifyMessageRequest,
     SearchMessagesRequest,
     SendEmailRequest,
-    VoiceInboxSummaryRequest,
-    VoiceTodayEmailsRequest,
 )
 from app.models.api.gmail_response import (
-    CreateDraftResponse,
     DeleteMessageResponse,
     GmailHealthResponse,
     GmailMessageResponse,
     GmailStatusResponse,
-    GmailThreadResponse,
     LabelsListResponse,
     MessagesListResponse,
     ModifyMessageResponse,
@@ -132,7 +124,8 @@ async def get_messages(
             for msg in messages
         ]
 
-        return MessagesListResponse(
+        # CREATE THE RESPONSE OBJECT FIRST
+        response_obj = MessagesListResponse(
             messages=message_responses,
             total_found=total_count,
             query_parameters={
@@ -141,8 +134,10 @@ async def get_messages(
                 "label_ids": label_ids,
                 "query": query,
             },
-            has_more=total_count > len(messages),  # Fixed logic: check if total exceeds returned count
+            has_more=total_count > len(messages),
         )
+
+        return response_obj
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error", user_id=user_id, error=str(e))
@@ -344,12 +339,20 @@ async def mark_as_read(message_id: str, claims: dict = Depends(auth_dependency))
         )
 
     except GmailConnectionError as e:
-        logger.error("Gmail connection error marking as read", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Gmail connection error marking as read",
+            user_id=user_id,
+            message_id=message_id,
+            error=str(e),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error("Error marking message as read", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Error marking message as read", user_id=user_id, message_id=message_id, error=str(e)
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to mark message as read"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to mark message as read",
         )
 
 
@@ -397,12 +400,20 @@ async def mark_as_unread(message_id: str, claims: dict = Depends(auth_dependency
         )
 
     except GmailConnectionError as e:
-        logger.error("Gmail connection error marking as unread", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Gmail connection error marking as unread",
+            user_id=user_id,
+            message_id=message_id,
+            error=str(e),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error("Error marking message as unread", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Error marking message as unread", user_id=user_id, message_id=message_id, error=str(e)
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to mark message as unread"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to mark message as unread",
         )
 
 
@@ -450,7 +461,12 @@ async def star_message(message_id: str, claims: dict = Depends(auth_dependency))
         )
 
     except GmailConnectionError as e:
-        logger.error("Gmail connection error starring message", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Gmail connection error starring message",
+            user_id=user_id,
+            message_id=message_id,
+            error=str(e),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error("Error starring message", user_id=user_id, message_id=message_id, error=str(e))
@@ -503,10 +519,17 @@ async def unstar_message(message_id: str, claims: dict = Depends(auth_dependency
         )
 
     except GmailConnectionError as e:
-        logger.error("Gmail connection error unstarring message", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Gmail connection error unstarring message",
+            user_id=user_id,
+            message_id=message_id,
+            error=str(e),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error("Error unstarring message", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Error unstarring message", user_id=user_id, message_id=message_id, error=str(e)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to unstar message"
         )
@@ -535,7 +558,12 @@ async def delete_message(message_id: str, claims: dict = Depends(auth_dependency
             )
 
     except GmailConnectionError as e:
-        logger.error("Gmail connection error deleting message", user_id=user_id, message_id=message_id, error=str(e))
+        logger.error(
+            "Gmail connection error deleting message",
+            user_id=user_id,
+            message_id=message_id,
+            error=str(e),
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error("Error deleting message", user_id=user_id, message_id=message_id, error=str(e))
@@ -617,8 +645,7 @@ async def get_voice_inbox_summary(claims: dict = Depends(auth_dependency)):
     except Exception as e:
         logger.error("Error getting voice inbox summary", user_id=user_id, error=str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to get inbox summary"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get inbox summary"
         )
 
 
@@ -646,8 +673,7 @@ async def get_voice_today_emails(claims: dict = Depends(auth_dependency)):
     except Exception as e:
         logger.error("Error getting today's emails", user_id=user_id, error=str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to get today's emails"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get today's emails"
         )
 
 

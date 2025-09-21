@@ -6,17 +6,16 @@ ARCHITECTURE: Mirrors calendar_operations_service.py patterns for consistency.
 /services/gmail_operations_service.py
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from app.db.helpers import DatabaseError, execute_query, with_db_retry
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.gmail_domain import (
     GmailConnectionStatus,
+    GmailLabel,
     GmailMessage,
     GmailSearchResult,
-    GmailThread,
-    GmailLabel,
 )
 from app.services.google_gmail_service import (
     GoogleGmailError,
@@ -539,9 +538,9 @@ class GmailConnectionService:
                     thread_id = original_message.thread_id
                 except Exception as e:
                     logger.warning(
-                        "Could not get thread ID for reply", 
+                        "Could not get thread ID for reply",
                         reply_to_message_id=reply_to_message_id,
-                        error=str(e)
+                        error=str(e),
                     )
 
             # Send email
@@ -603,9 +602,7 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If marking as read fails
         """
-        return await self._modify_message_labels(
-            user_id, message_id, remove_labels=["UNREAD"]
-        )
+        return await self._modify_message_labels(user_id, message_id, remove_labels=["UNREAD"])
 
     async def mark_message_as_unread(self, user_id: str, message_id: str) -> GmailMessage:
         """
@@ -621,9 +618,7 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If marking as unread fails
         """
-        return await self._modify_message_labels(
-            user_id, message_id, add_labels=["UNREAD"]
-        )
+        return await self._modify_message_labels(user_id, message_id, add_labels=["UNREAD"])
 
     async def star_message(self, user_id: str, message_id: str) -> GmailMessage:
         """
@@ -639,9 +634,7 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If starring fails
         """
-        return await self._modify_message_labels(
-            user_id, message_id, add_labels=["STARRED"]
-        )
+        return await self._modify_message_labels(user_id, message_id, add_labels=["STARRED"])
 
     async def unstar_message(self, user_id: str, message_id: str) -> GmailMessage:
         """
@@ -657,9 +650,7 @@ class GmailConnectionService:
         Raises:
             GmailConnectionError: If unstarring fails
         """
-        return await self._modify_message_labels(
-            user_id, message_id, remove_labels=["STARRED"]
-        )
+        return await self._modify_message_labels(user_id, message_id, remove_labels=["STARRED"])
 
     async def delete_message(self, user_id: str, message_id: str) -> bool:
         """
@@ -808,9 +799,7 @@ class GmailConnectionService:
                 raise GmailConnectionError("No Gmail permissions", user_id=user_id)
 
             # Get labels
-            labels = await google_gmail_service.get_labels(
-                access_token=oauth_tokens.access_token
-            )
+            labels = await google_gmail_service.get_labels(access_token=oauth_tokens.access_token)
 
             logger.info("Gmail labels retrieved", user_id=user_id, label_count=len(labels))
             return labels
@@ -1042,26 +1031,30 @@ async def gmail_connection_health() -> dict[str, Any]:
 async def get_inbox_summary_for_voice(user_id: str) -> dict[str, Any]:
     """
     Get inbox summary optimized for voice responses.
-    
+
     Perfect for AI function calling and voice assistant responses.
-    
+
     Args:
         user_id: UUID string of the user
-        
+
     Returns:
         Dict: Voice-optimized inbox summary
     """
     try:
         # Get unread messages first (most important for voice)
         unread_messages, _ = await get_user_inbox_messages(user_id, max_results=5, only_unread=True)
-        
+
         # Get recent messages (for context)
-        recent_messages, _ = await get_user_inbox_messages(user_id, max_results=10, only_unread=False)
-        
+        recent_messages, _ = await get_user_inbox_messages(
+            user_id, max_results=10, only_unread=False
+        )
+
         # Analyze for voice response
-        high_priority_unread = [msg for msg in unread_messages if msg.get_priority_level() == "high"]
+        high_priority_unread = [
+            msg for msg in unread_messages if msg.get_priority_level() == "high"
+        ]
         actionable_unread = [msg for msg in unread_messages if msg.is_actionable()]
-        
+
         # Create voice-friendly summary
         summary = {
             "unread_count": len(unread_messages),
@@ -1082,16 +1075,16 @@ async def get_inbox_summary_for_voice(user_id: str) -> dict[str, Any]:
             ],
             "voice_summary": _generate_voice_summary(unread_messages, high_priority_unread),
         }
-        
+
         logger.info(
             "Voice inbox summary generated",
             user_id=user_id,
             unread_count=summary["unread_count"],
             high_priority_count=summary["high_priority_count"],
         )
-        
+
         return summary
-        
+
     except Exception as e:
         logger.error("Error generating voice inbox summary", user_id=user_id, error=str(e))
         return {
@@ -1105,17 +1098,19 @@ async def get_inbox_summary_for_voice(user_id: str) -> dict[str, Any]:
         }
 
 
-def _generate_voice_summary(unread_messages: list[GmailMessage], high_priority: list[GmailMessage]) -> str:
+def _generate_voice_summary(
+    unread_messages: list[GmailMessage], high_priority: list[GmailMessage]
+) -> str:
     """Generate natural voice summary of inbox."""
     if not unread_messages:
         return "You have no unread emails."
-    
+
     count = len(unread_messages)
-    
+
     if count == 1:
         msg = unread_messages[0]
         return f"You have 1 unread email from {msg.sender['name'] or msg.sender['email']} about {msg.subject}."
-    
+
     if high_priority:
         high_count = len(high_priority)
         if high_count == 1:
@@ -1123,24 +1118,26 @@ def _generate_voice_summary(unread_messages: list[GmailMessage], high_priority: 
             return f"You have {count} unread emails, including 1 high priority message from {msg.sender['name'] or msg.sender['email']} about {msg.subject}."
         else:
             return f"You have {count} unread emails, including {high_count} high priority messages."
-    
+
     # Regular summary
     if count <= 3:
-        senders = [msg.sender['name'] or msg.sender['email'] for msg in unread_messages[:3]]
-        sender_list = ", ".join(senders[:-1]) + f" and {senders[-1]}" if len(senders) > 1 else senders[0]
+        senders = [msg.sender["name"] or msg.sender["email"] for msg in unread_messages[:3]]
+        sender_list = (
+            ", ".join(senders[:-1]) + f" and {senders[-1]}" if len(senders) > 1 else senders[0]
+        )
         return f"You have {count} unread emails from {sender_list}."
     else:
-        top_senders = [msg.sender['name'] or msg.sender['email'] for msg in unread_messages[:2]]
+        top_senders = [msg.sender["name"] or msg.sender["email"] for msg in unread_messages[:2]]
         return f"You have {count} unread emails, including messages from {', '.join(top_senders)} and others."
 
 
 async def get_today_emails_for_voice(user_id: str) -> dict[str, Any]:
     """
     Get today's emails optimized for voice responses.
-    
+
     Args:
         user_id: UUID string of the user
-        
+
     Returns:
         Dict: Voice-optimized today's email summary
     """
@@ -1148,11 +1145,15 @@ async def get_today_emails_for_voice(user_id: str) -> dict[str, Any]:
         # Search for today's emails
         today_query = "newer_than:1d"
         search_result = await search_user_messages(user_id, today_query, max_results=20)
-        
+
         today_messages = search_result.messages
         unread_today = [msg for msg in today_messages if msg.is_unread()]
-        important_today = [msg for msg in today_messages if msg.is_important() or msg.get_priority_level() == "high"]
-        
+        important_today = [
+            msg
+            for msg in today_messages
+            if msg.is_important() or msg.get_priority_level() == "high"
+        ]
+
         summary = {
             "total_today": len(today_messages),
             "unread_today": len(unread_today),
@@ -1169,11 +1170,13 @@ async def get_today_emails_for_voice(user_id: str) -> dict[str, Any]:
                 }
                 for msg in today_messages[:5]  # Top 5 for voice
             ],
-            "voice_summary": _generate_today_voice_summary(today_messages, unread_today, important_today),
+            "voice_summary": _generate_today_voice_summary(
+                today_messages, unread_today, important_today
+            ),
         }
-        
+
         return summary
-        
+
     except Exception as e:
         logger.error("Error generating today's email summary", user_id=user_id, error=str(e))
         return {
@@ -1187,26 +1190,26 @@ async def get_today_emails_for_voice(user_id: str) -> dict[str, Any]:
 
 
 def _generate_today_voice_summary(
-    today_messages: list[GmailMessage], 
-    unread_today: list[GmailMessage], 
-    important_today: list[GmailMessage]
+    today_messages: list[GmailMessage],
+    unread_today: list[GmailMessage],
+    important_today: list[GmailMessage],
 ) -> str:
     """Generate natural voice summary of today's emails."""
     total = len(today_messages)
     unread_count = len(unread_today)
     important_count = len(important_today)
-    
+
     if total == 0:
         return "You haven't received any emails today."
-    
+
     parts = [f"You received {total} email{'s' if total != 1 else ''} today"]
-    
+
     if unread_count > 0:
         parts.append(f"{unread_count} unread")
-    
+
     if important_count > 0:
         parts.append(f"{important_count} marked as important")
-    
+
     return ", ".join(parts) + "."
 
 

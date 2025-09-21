@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 class GetMessagesRequest(BaseModel):
     """Request for getting Gmail messages with filters."""
 
-    max_results: int = Field(default=10, ge=1, le=100, description="Maximum messages to return (1-100)")
+    max_results: int = Field(
+        default=10, ge=1, le=100, description="Maximum messages to return (1-100)"
+    )
     label_ids: list[str] | None = Field(
         default=None, description="Label IDs to filter by (e.g., ['INBOX', 'UNREAD'])"
     )

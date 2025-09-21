@@ -13,9 +13,8 @@ from fastapi import FastAPI, Request
 from app.config import settings
 from app.db.pool import db_pool  # Import the pool manager
 from app.infrastructure.observability.logging import get_logger, setup_logging
-from app.routes import calendar, gmail_auth, health, onboarding, protected
-from app.services.redis_client import fast_redis
 from app.routes import calendar, gmail, gmail_auth, health, onboarding, protected
+from app.services.redis_client import fast_redis
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -46,13 +45,13 @@ async def lifespan(app: FastAPI):
 
         # Enable token refresh job (OAuth cleanup disabled due to race conditions)
         logger.info("Starting token refresh background job")
-        
+
         # Import token refresh job here, after database pool is ready
         from app.jobs.token_refresh_job import start_token_refresh_scheduler
-        
+
         # Start token refresh job (runs every 10 minutes)
         asyncio.create_task(start_token_refresh_scheduler())
-        
+
         logger.info("Token refresh job started successfully")
 
     except Exception as e:

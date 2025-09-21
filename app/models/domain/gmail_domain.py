@@ -94,22 +94,22 @@ class GmailMessage:
         """Parse multipart email body."""
         for part in parts:
             mime_type = part.get("mimeType", "")
-            
+
             if mime_type == "text/plain":
                 body_data = part.get("body", {}).get("data")
                 if body_data:
                     self.body_text = self._decode_base64_data(body_data)
-                    
+
             elif mime_type == "text/html":
                 body_data = part.get("body", {}).get("data")
                 if body_data:
                     self.body_html = self._decode_base64_data(body_data)
-                    
+
             elif mime_type.startswith("multipart/"):
                 # Nested multipart
                 nested_parts = part.get("parts", [])
                 self._parse_multipart_body(nested_parts)
-                
+
             elif part.get("filename"):
                 # Attachment
                 attachment = {
@@ -212,15 +212,15 @@ class GmailMessage:
             else:
                 months = time_diff.days // 30
                 return f"{months} month{'s' if months > 1 else ''} ago"
-        
+
         hours = time_diff.seconds // 3600
         if hours > 0:
             return f"{hours} hour{'s' if hours > 1 else ''} ago"
-        
+
         minutes = time_diff.seconds // 60
         if minutes > 0:
             return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
-        
+
         return "just now"
 
     def get_priority_level(self) -> str:
@@ -228,13 +228,13 @@ class GmailMessage:
         # High priority indicators
         if self.is_important():
             return "high"
-        
+
         # Check for urgent keywords in subject
         urgent_keywords = ["urgent", "asap", "emergency", "critical", "immediate"]
         subject_lower = self.subject.lower()
         if any(keyword in subject_lower for keyword in urgent_keywords):
             return "high"
-        
+
         # Medium priority - unread and recent
         if self.is_unread():
             received = self.get_received_datetime()
@@ -242,16 +242,26 @@ class GmailMessage:
                 hours_old = (datetime.now(UTC) - received).total_seconds() / 3600
                 if hours_old < 24:  # Less than 24 hours old
                     return "medium"
-        
+
         return "normal"
 
     def is_actionable(self) -> bool:
         """Check if message likely requires action."""
         action_keywords = [
-            "please", "request", "need", "required", "deadline", "due", 
-            "action", "respond", "reply", "confirm", "approve", "review"
+            "please",
+            "request",
+            "need",
+            "required",
+            "deadline",
+            "due",
+            "action",
+            "respond",
+            "reply",
+            "confirm",
+            "approve",
+            "review",
         ]
-        
+
         text_to_check = f"{self.subject} {self.get_body_preview(300)}".lower()
         return any(keyword in text_to_check for keyword in action_keywords)
 
@@ -293,7 +303,7 @@ class GmailThread:
         self.snippet = data.get("snippet", "")
         self.history_id = data.get("historyId")
         self.messages = []
-        
+
         # Parse messages in thread
         for msg_data in data.get("messages", []):
             message = GmailMessage(msg_data)
@@ -303,12 +313,12 @@ class GmailThread:
         """Get the most recent message in the thread."""
         if not self.messages:
             return None
-        
+
         # Sort by received time, most recent first
         sorted_messages = sorted(
             self.messages,
             key=lambda m: m.get_received_datetime() or datetime.min.replace(tzinfo=UTC),
-            reverse=True
+            reverse=True,
         )
         return sorted_messages[0]
 
@@ -321,7 +331,7 @@ class GmailThread:
                 participants.add((message.recipient["email"], message.recipient["name"]))
             for cc in message.cc:
                 participants.add((cc["email"], cc["name"]))
-        
+
         return [{"email": email, "name": name} for email, name in participants]
 
     def has_unread_messages(self) -> bool:
@@ -420,7 +430,7 @@ class GmailLabel:
             "STARRED": "Starred",
             "IMPORTANT": "Important",
         }
-        
+
         return system_label_names.get(self.id, self.name)
 
     def to_dict(self) -> dict:

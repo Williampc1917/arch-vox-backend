@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.infrastructure.observability.logging import get_logger
-from app.models.domain.gmail_domain import GmailMessage, GmailThread, GmailLabel
+from app.models.domain.gmail_domain import GmailLabel, GmailMessage, GmailThread
 
 logger = get_logger(__name__)
 
@@ -220,10 +220,10 @@ class GoogleGmailService:
 
             # Get total count from resultSizeEstimate
             total_count = data.get("resultSizeEstimate", 0)
-            
+
             # Get message IDs and fetch full message details
             message_ids = [msg["id"] for msg in data.get("messages", [])]
-            
+
             if not message_ids:
                 logger.info("No messages found")
                 return [], total_count
@@ -238,7 +238,9 @@ class GoogleGmailService:
                     logger.warning(f"Failed to get message {msg_id}", error=str(e))
                     continue
 
-            logger.info("Messages listed successfully", message_count=len(messages), total_count=total_count)
+            logger.info(
+                "Messages listed successfully", message_count=len(messages), total_count=total_count
+            )
             return messages, total_count
 
         except GoogleGmailError:
@@ -362,7 +364,7 @@ class GoogleGmailService:
             msg = MIMEMultipart()
             msg["To"] = ", ".join(to)
             msg["Subject"] = subject
-            
+
             if cc:
                 msg["Cc"] = ", ".join(cc)
             if reply_to:
@@ -560,7 +562,7 @@ class GoogleGmailService:
             msg = MIMEMultipart()
             msg["To"] = ", ".join(to)
             msg["Subject"] = subject
-            
+
             if cc:
                 msg["Cc"] = ", ".join(cc)
 
@@ -571,11 +573,7 @@ class GoogleGmailService:
             raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
             # Prepare request data
-            draft_data = {
-                "message": {
-                    "raw": raw_message
-                }
-            }
+            draft_data = {"message": {"raw": raw_message}}
 
             url = f"{GMAIL_API_BASE_URL}/users/{GMAIL_USER_ID}/drafts"
             headers = self._get_auth_headers(access_token)
