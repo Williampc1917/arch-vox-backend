@@ -169,7 +169,7 @@ class GoogleGmailService:
         query: str | None = None,
         include_spam_trash: bool = False,
         page_token: str | None = None,
-    ) -> list[GmailMessage]:
+    ) -> tuple[list[GmailMessage], int]:
         """
         List messages from user's Gmail.
 
@@ -182,7 +182,7 @@ class GoogleGmailService:
             page_token: Token for pagination
 
         Returns:
-            List[GmailMessage]: List of Gmail messages
+            Tuple[list[GmailMessage], int]: (List of Gmail messages, Total count)
 
         Raises:
             GoogleGmailError: If listing messages fails
@@ -218,12 +218,15 @@ class GoogleGmailService:
             )
             data = self._handle_api_response(response, "list_messages")
 
+            # Get total count from resultSizeEstimate
+            total_count = data.get("resultSizeEstimate", 0)
+            
             # Get message IDs and fetch full message details
             message_ids = [msg["id"] for msg in data.get("messages", [])]
             
             if not message_ids:
                 logger.info("No messages found")
-                return []
+                return [], total_count
 
             # Fetch full message details (could be optimized with batch requests)
             messages = []
@@ -235,8 +238,8 @@ class GoogleGmailService:
                     logger.warning(f"Failed to get message {msg_id}", error=str(e))
                     continue
 
-            logger.info("Messages listed successfully", message_count=len(messages))
-            return messages
+            logger.info("Messages listed successfully", message_count=len(messages), total_count=total_count)
+            return messages, total_count
 
         except GoogleGmailError:
             raise
@@ -653,7 +656,7 @@ async def list_user_messages(
     max_results: int = 10,
     label_ids: list[str] | None = None,
     query: str | None = None,
-) -> list[GmailMessage]:
+) -> tuple[list[GmailMessage], int]:
     """List messages for user."""
     return await google_gmail_service.list_messages(access_token, max_results, label_ids, query)
 

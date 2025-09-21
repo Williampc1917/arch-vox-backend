@@ -100,7 +100,7 @@ async def get_messages(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     try:
-        messages = await get_user_inbox_messages(user_id, max_results, only_unread)
+        messages, total_count = await get_user_inbox_messages(user_id, max_results, only_unread)
 
         # Convert domain models to API response models
         message_responses = [
@@ -134,14 +134,14 @@ async def get_messages(
 
         return MessagesListResponse(
             messages=message_responses,
-            total_found=len(message_responses),
+            total_found=total_count,
             query_parameters={
                 "max_results": max_results,
                 "only_unread": only_unread,
                 "label_ids": label_ids,
                 "query": query,
             },
-            has_more=len(messages) >= max_results,
+            has_more=total_count > len(messages),  # Fixed logic: check if total exceeds returned count
         )
 
     except GmailConnectionError as e:

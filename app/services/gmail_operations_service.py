@@ -294,7 +294,7 @@ class GmailConnectionService:
 
     async def get_inbox_messages(
         self, user_id: str, max_results: int = 10, only_unread: bool = False
-    ) -> list[GmailMessage]:
+    ) -> tuple[list[GmailMessage], int]:
         """
         Get inbox messages for user.
 
@@ -304,7 +304,7 @@ class GmailConnectionService:
             only_unread: Whether to return only unread messages
 
         Returns:
-            List[GmailMessage]: Inbox messages
+            Tuple[list[GmailMessage], int]: (Inbox messages, Total count)
 
         Raises:
             GmailConnectionError: If getting messages fails
@@ -325,8 +325,8 @@ class GmailConnectionService:
             if only_unread:
                 label_ids.append("UNREAD")
 
-            # Get messages
-            messages = await google_gmail_service.list_messages(
+            # Get messages with total count
+            messages, total_count = await google_gmail_service.list_messages(
                 access_token=oauth_tokens.access_token,
                 max_results=max_results,
                 label_ids=label_ids,
@@ -336,10 +336,11 @@ class GmailConnectionService:
                 "Inbox messages retrieved",
                 user_id=user_id,
                 message_count=len(messages),
+                total_count=total_count,
                 only_unread=only_unread,
             )
 
-            return messages
+            return messages, total_count
 
         except GoogleGmailError as e:
             logger.error(
@@ -364,7 +365,7 @@ class GmailConnectionService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise GmailConnectionError(f"Failed to get messages: {e}", user_id=user_id) from e
+            raise GmailConnectionError(f"Failed to get inbox messages: {e}", user_id=user_id) from e
 
     async def get_message_by_id(self, user_id: str, message_id: str) -> GmailMessage:
         """
@@ -970,7 +971,7 @@ async def get_gmail_status(user_id: str) -> GmailConnectionStatus:
 
 async def get_user_inbox_messages(
     user_id: str, max_results: int = 10, only_unread: bool = False
-) -> list[GmailMessage]:
+) -> tuple[list[GmailMessage], int]:
     """Get inbox messages for user."""
     return await gmail_connection_service.get_inbox_messages(user_id, max_results, only_unread)
 
@@ -1052,10 +1053,10 @@ async def get_inbox_summary_for_voice(user_id: str) -> dict[str, Any]:
     """
     try:
         # Get unread messages first (most important for voice)
-        unread_messages = await get_user_inbox_messages(user_id, max_results=5, only_unread=True)
+        unread_messages, _ = await get_user_inbox_messages(user_id, max_results=5, only_unread=True)
         
         # Get recent messages (for context)
-        recent_messages = await get_user_inbox_messages(user_id, max_results=10, only_unread=False)
+        recent_messages, _ = await get_user_inbox_messages(user_id, max_results=10, only_unread=False)
         
         # Analyze for voice response
         high_priority_unread = [msg for msg in unread_messages if msg.get_priority_level() == "high"]
