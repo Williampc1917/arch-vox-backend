@@ -5,6 +5,7 @@ UPDATED: Now uses domain models from app.models.domain.calendar_domain
 ARCHITECTURE: Mirrors gmail_connection_service.py patterns for consistency.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -717,9 +718,9 @@ async def get_user_calendars(user_id: str) -> list[CalendarInfo]:
     return await calendar_connection_service.get_user_calendars(user_id)
 
 
-async def get_user_upcoming_events(user_id: str, hours_ahead: int = 24) -> list[CalendarEvent]:
+async def get_user_upcoming_events(user_id: str, hours_ahead: int = 24, max_events: int = 10) -> list[CalendarEvent]:
     """Get upcoming events for user."""
-    return await calendar_connection_service.get_upcoming_events(user_id, hours_ahead)
+    return await calendar_connection_service.get_upcoming_events(user_id, hours_ahead, max_events)
 
 
 async def check_user_availability(

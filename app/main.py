@@ -4,6 +4,7 @@
 Updated main.py with database pool lifecycle management.
 """
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from app.db.pool import db_pool  # Import the pool manager
 from app.infrastructure.observability.logging import get_logger, setup_logging
 from app.routes import calendar, gmail_auth, health, onboarding, protected
 from app.services.redis_client import fast_redis
+from app.routes import calendar, gmail, gmail_auth, health, onboarding, protected
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -42,18 +44,16 @@ async def lifespan(app: FastAPI):
 
         logger.info("All services initialized successfully", services=startup_tasks)
 
-        # 🔹 TEMPORARILY DISABLED - OAuth cleanup was causing race conditions
-        # logger.info("Starting background jobs (cleanup + token refresh)")
-
-        # Import jobs here, after database pool is ready
-        # from app.jobs.oauth_cleanup_job import start_oauth_cleanup_scheduler
-        # from app.jobs.token_refresh_job import start_token_refresh_scheduler
-
-        # Start background jobs
-        # asyncio.create_task(start_oauth_cleanup_scheduler())  # runs every 6h
-        # asyncio.create_task(start_token_refresh_scheduler())  # runs every 10m
-
-        logger.info("Background jobs disabled - OAuth cleanup caused race conditions")
+        # Enable token refresh job (OAuth cleanup disabled due to race conditions)
+        logger.info("Starting token refresh background job")
+        
+        # Import token refresh job here, after database pool is ready
+        from app.jobs.token_refresh_job import start_token_refresh_scheduler
+        
+        # Start token refresh job (runs every 10 minutes)
+        asyncio.create_task(start_token_refresh_scheduler())
+        
+        logger.info("Token refresh job started successfully")
 
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e), completed_tasks=startup_tasks)
@@ -114,6 +114,8 @@ app.include_router(health.router)
 app.include_router(protected.router)
 app.include_router(onboarding.router)
 app.include_router(gmail_auth.router)
+app.include_router(calendar.router)
+app.include_router(gmail.router)  # Add this line
 app.include_router(calendar.router)
 
 

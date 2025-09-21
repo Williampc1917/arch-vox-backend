@@ -2,6 +2,7 @@
 Google Calendar API Service for calendar operations and event management.
 Handles Calendar API client initialization, CRUD operations, and timezone management.
 UPDATED: Now uses domain models from app.models.domain.calendar_domain
+Low-level Calendar API client
 """
 
 import json
