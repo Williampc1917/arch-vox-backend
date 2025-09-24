@@ -771,8 +771,6 @@ class GmailConnectionService:
 
                 # For async services, just check if they're importable
                 try:
-                    from app.services.oauth_state_service import oauth_state_health
-                    from app.services.token_service import token_service_health
 
                     health_data["oauth_state_service"] = "importable"
                     health_data["token_service"] = "importable"

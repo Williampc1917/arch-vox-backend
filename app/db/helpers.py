@@ -137,11 +137,11 @@ async def execute_query(
     """
     try:
         if connection:
-            cursor = await connection.execute(query, params)  # Fixed: removed *params
+            cursor = await connection.execute(query, *params)
             return cursor.rowcount
         else:
             async with await get_db_connection() as conn:
-                cursor = await conn.execute(query, params)  # Fixed: removed *params
+                cursor = await conn.execute(query, *params)
                 return cursor.rowcount
 
     except psycopg.Error as e:
@@ -168,7 +168,7 @@ async def execute_transaction(queries_and_params: list[tuple]) -> bool:
     try:
         async with await get_db_transaction() as conn:
             for query, params in queries_and_params:
-                await conn.execute(query, params)  # Fixed: removed *params
+                await conn.execute(query, *params)
 
         logger.debug("Transaction completed successfully", query_count=len(queries_and_params))
         return True

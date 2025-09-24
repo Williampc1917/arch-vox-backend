@@ -75,7 +75,7 @@ async def get_gmail_connection_status(claims: dict = Depends(auth_dependency)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get Gmail status",
-        )
+        ) from e
 
 
 @router.get("/messages", response_model=MessagesListResponse)
@@ -141,12 +141,12 @@ async def get_messages(
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting messages", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get messages"
-        )
+        ) from e
 
 
 @router.get("/messages/{message_id}", response_model=GmailMessageResponse)
@@ -187,12 +187,12 @@ async def get_message(message_id: str, claims: dict = Depends(auth_dependency)):
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error", user_id=user_id, message_id=message_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting message", user_id=user_id, message_id=message_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get message"
-        )
+        ) from e
 
 
 @router.post("/search", response_model=SearchResultsResponse)
@@ -247,12 +247,12 @@ async def search_messages(request: SearchMessagesRequest, claims: dict = Depends
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error", user_id=user_id, query=request.query, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error searching messages", user_id=user_id, query=request.query, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to search messages"
-        )
+        ) from e
 
 
 @router.post("/send", response_model=SendEmailResponse)
@@ -287,12 +287,12 @@ async def send_email(request: SendEmailRequest, claims: dict = Depends(auth_depe
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error sending email", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error sending email", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send email"
-        )
+        ) from e
 
 
 @router.post("/messages/{message_id}/read", response_model=ModifyMessageResponse)
@@ -345,7 +345,7 @@ async def mark_as_read(message_id: str, claims: dict = Depends(auth_dependency))
             message_id=message_id,
             error=str(e),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(
             "Error marking message as read", user_id=user_id, message_id=message_id, error=str(e)
@@ -353,7 +353,7 @@ async def mark_as_read(message_id: str, claims: dict = Depends(auth_dependency))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to mark message as read",
-        )
+        ) from e
 
 
 @router.post("/messages/{message_id}/unread", response_model=ModifyMessageResponse)
@@ -406,7 +406,7 @@ async def mark_as_unread(message_id: str, claims: dict = Depends(auth_dependency
             message_id=message_id,
             error=str(e),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(
             "Error marking message as unread", user_id=user_id, message_id=message_id, error=str(e)
@@ -414,7 +414,7 @@ async def mark_as_unread(message_id: str, claims: dict = Depends(auth_dependency
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to mark message as unread",
-        )
+        ) from e
 
 
 @router.post("/messages/{message_id}/star", response_model=ModifyMessageResponse)
@@ -467,12 +467,12 @@ async def star_message(message_id: str, claims: dict = Depends(auth_dependency))
             message_id=message_id,
             error=str(e),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error starring message", user_id=user_id, message_id=message_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to star message"
-        )
+        ) from e
 
 
 @router.delete("/messages/{message_id}/star", response_model=ModifyMessageResponse)
@@ -525,14 +525,14 @@ async def unstar_message(message_id: str, claims: dict = Depends(auth_dependency
             message_id=message_id,
             error=str(e),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(
             "Error unstarring message", user_id=user_id, message_id=message_id, error=str(e)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to unstar message"
-        )
+        ) from e
 
 
 @router.delete("/messages/{message_id}", response_model=DeleteMessageResponse)
@@ -564,12 +564,12 @@ async def delete_message(message_id: str, claims: dict = Depends(auth_dependency
             message_id=message_id,
             error=str(e),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error deleting message", user_id=user_id, message_id=message_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete message"
-        )
+        ) from e
 
 
 @router.get("/labels", response_model=LabelsListResponse)
@@ -611,12 +611,12 @@ async def get_labels(claims: dict = Depends(auth_dependency)):
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error getting labels", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting labels", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get labels"
-        )
+        ) from e
 
 
 # Voice-optimized endpoints for AI assistant
@@ -641,12 +641,12 @@ async def get_voice_inbox_summary(claims: dict = Depends(auth_dependency)):
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error getting voice summary", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting voice inbox summary", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get inbox summary"
-        )
+        ) from e
 
 
 @router.get("/voice/today", response_model=VoiceTodayEmailsResponse)
@@ -669,12 +669,12 @@ async def get_voice_today_emails(claims: dict = Depends(auth_dependency)):
 
     except GmailConnectionError as e:
         logger.error("Gmail connection error getting today's emails", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting today's emails", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get today's emails"
-        )
+        ) from e
 
 
 @router.get("/health", response_model=GmailHealthResponse)

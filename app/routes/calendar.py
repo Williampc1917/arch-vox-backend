@@ -65,7 +65,7 @@ async def get_calendar_connection_status(claims: dict = Depends(auth_dependency)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get calendar status",
-        )
+        ) from e
 
 
 @router.get("/calendars", response_model=CalendarsListResponse)
@@ -111,12 +111,16 @@ async def list_user_calendars(claims: dict = Depends(auth_dependency)):
 
     except CalendarConnectionError as e:
         logger.error("Calendar connection error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
     except Exception as e:
         logger.error("Error listing calendars", user_id=user_id, error=str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list calendars"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list calendars",
+        ) from e
 
 
 @router.get("/events", response_model=EventsListResponse)
@@ -180,12 +184,12 @@ async def get_upcoming_events(
 
     except CalendarConnectionError as e:
         logger.error("Calendar connection error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error getting events", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get events"
-        )
+        ) from e
 
 
 @router.post("/availability", response_model=AvailabilityResponse)
@@ -225,12 +229,12 @@ async def check_availability(
 
     except CalendarConnectionError as e:
         logger.error("Calendar connection error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error checking availability", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to check availability"
-        )
+        ) from e
 
 
 @router.post("/events", response_model=CreateEventResponse)
@@ -282,12 +286,12 @@ async def create_event(request: CreateEventRequest, claims: dict = Depends(auth_
 
     except CalendarConnectionError as e:
         logger.error("Calendar connection error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error("Error creating event", user_id=user_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create event"
-        )
+        ) from e
 
 
 @router.get("/health", response_model=CalendarHealthResponse)
