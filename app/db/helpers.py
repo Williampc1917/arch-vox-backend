@@ -6,6 +6,7 @@ Reduces boilerplate in service layer.
 """
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -241,3 +242,265 @@ def with_db_retry(max_retries: int = 3, base_delay: float = 0.1):
         return wrapper
 
     return decorator
+
+
+# Email Style Database Operations
+
+
+async def get_user_plan_limits(user_id: str) -> dict[str, Any] | None:
+    """
+    Get user's plan limits including email extraction limits.
+
+    Args:
+        user_id: UUID string of the user
+
+    Returns:
+        dict with plan limits or None if user not found
+    """
+    query = """
+    SELECT 
+        p.name as plan_name,
+        p.daily_minutes,
+        p.daily_email_extractions
+    FROM users u
+    JOIN user_subscriptions us ON u.id = us.user_id
+    JOIN plans p ON us.plan_name = p.name
+    WHERE u.id = %s AND u.is_active = true
+    """
+
+    row = await fetch_one(query, (user_id,))
+
+    if row:
+        row_values = list(row.values())
+        plan_name, daily_minutes, daily_email_extractions = row_values
+        return {
+            "plan_name": plan_name,
+            "daily_minutes": float(daily_minutes) if daily_minutes else 0.0,
+            "daily_email_extractions": daily_email_extractions or 0,
+        }
+
+    return None
+
+
+async def get_daily_extraction_usage(user_id: str, usage_date: str = None) -> dict[str, Any]:
+    """
+    Get user's daily email extraction usage for specific date.
+
+    Args:
+        user_id: UUID string of the user
+        usage_date: Date string (YYYY-MM-DD) or None for today
+
+    Returns:
+        dict with usage info (defaults to 0 if no record exists)
+    """
+    if usage_date is None:
+        usage_date = datetime.now(UTC).date()
+
+    query = """
+    SELECT 
+        email_extractions_used,
+        updated_at
+    FROM daily_usage
+    WHERE user_id = %s AND usage_date = %s
+    """
+
+    row = await fetch_one(query, (user_id, usage_date))
+
+    if row:
+        row_values = list(row.values())
+        extractions_used, updated_at = row_values
+        return {
+            "extractions_used": extractions_used or 0,
+            "usage_date": str(usage_date),
+            "last_updated": updated_at.isoformat() if updated_at else None,
+        }
+
+    # No record exists - return defaults
+    return {"extractions_used": 0, "usage_date": str(usage_date), "last_updated": None}
+
+
+async def increment_extraction_counter(user_id: str) -> bool:
+    """
+    Increment user's daily email extraction counter.
+    Creates record if doesn't exist for today.
+
+    Args:
+        user_id: UUID string of the user
+
+    Returns:
+        bool: True if increment successful, False otherwise
+    """
+    try:
+        query = """
+        INSERT INTO daily_usage (
+            user_id, usage_date, email_extractions_used, updated_at
+        ) VALUES (
+            %s, CURRENT_DATE, 1, NOW()
+        )
+        ON CONFLICT (user_id, usage_date) 
+        DO UPDATE SET 
+            email_extractions_used = daily_usage.email_extractions_used + 1,
+            updated_at = NOW()
+        """
+
+        affected_rows = await execute_query(query, (user_id,))
+        return affected_rows > 0
+
+    except DatabaseError as e:
+        logger.error(
+            "Database error incrementing extraction counter", user_id=user_id, error=str(e)
+        )
+        return False
+    except Exception as e:
+        logger.error(
+            "Unexpected error incrementing extraction counter", user_id=user_id, error=str(e)
+        )
+        return False
+
+
+async def store_email_style_preferences(user_id: str, preferences: dict[str, Any]) -> bool:
+    """
+    Store user's email style preferences in user_settings table.
+
+    Args:
+        user_id: UUID string of the user
+        preferences: Email style preferences dict
+
+    Returns:
+        bool: True if storage successful, False otherwise
+    """
+    try:
+        import json
+
+        query = """
+        UPDATE user_settings 
+        SET 
+            email_style_preferences = %s,
+            updated_at = NOW()
+        WHERE user_id = %s
+        """
+
+        # Convert preferences to JSON string
+        preferences_json = json.dumps(preferences)
+
+        affected_rows = await execute_query(query, (preferences_json, user_id))
+        return affected_rows > 0
+
+    except DatabaseError as e:
+        logger.error(
+            "Database error storing email style preferences", user_id=user_id, error=str(e)
+        )
+        return False
+    except Exception as e:
+        logger.error(
+            "Unexpected error storing email style preferences", user_id=user_id, error=str(e)
+        )
+        return False
+
+
+async def get_email_style_preferences(user_id: str) -> dict[str, Any] | None:
+    """
+    Get user's current email style preferences from user_settings.
+
+    Args:
+        user_id: UUID string of the user
+
+    Returns:
+        dict with email style preferences or None if not found
+    """
+    try:
+        query = """
+        SELECT email_style_preferences
+        FROM user_settings
+        WHERE user_id = %s
+        """
+
+        row = await fetch_one(query, (user_id,))
+
+        if row:
+            preferences = list(row.values())[0]
+            # preferences is already a dict from JSONB column
+            return preferences if preferences else None
+
+        return None
+
+    except DatabaseError as e:
+        logger.error(
+            "Database error getting email style preferences", user_id=user_id, error=str(e)
+        )
+        return None
+    except Exception as e:
+        logger.error(
+            "Unexpected error getting email style preferences", user_id=user_id, error=str(e)
+        )
+        return None
+
+
+async def get_user_extraction_limit_status(user_id: str) -> dict[str, Any]:
+    """
+    Get complete rate limit status for user including plan limits and current usage.
+    Combines plan limits with daily usage in single query for efficiency.
+
+    Args:
+        user_id: UUID string of the user
+
+    Returns:
+        dict with complete rate limit status
+    """
+    try:
+        query = """
+        SELECT 
+            p.daily_email_extractions as daily_limit,
+            p.name as plan_name,
+            COALESCE(du.email_extractions_used, 0) as used_today,
+            du.updated_at as last_extraction_at
+        FROM users u
+        JOIN user_subscriptions us ON u.id = us.user_id
+        JOIN plans p ON us.plan_name = p.name
+        LEFT JOIN daily_usage du ON u.id = du.user_id AND du.usage_date = CURRENT_DATE
+        WHERE u.id = %s AND u.is_active = true
+        """
+
+        row = await fetch_one(query, (user_id,))
+
+        if row:
+            row_values = list(row.values())
+            daily_limit, plan_name, used_today, last_extraction_at = row_values
+
+            remaining = max(0, (daily_limit or 0) - (used_today or 0))
+            can_extract = remaining > 0
+
+            return {
+                "can_extract": can_extract,
+                "daily_limit": daily_limit or 0,
+                "used_today": used_today or 0,
+                "remaining": remaining,
+                "plan_name": plan_name,
+                "last_extraction_at": (
+                    last_extraction_at.isoformat() if last_extraction_at else None
+                ),
+                "reset_time": datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+                + timedelta(days=1),
+            }
+
+        # User not found or no plan
+        return {
+            "can_extract": False,
+            "daily_limit": 0,
+            "used_today": 0,
+            "remaining": 0,
+            "plan_name": None,
+            "last_extraction_at": None,
+            "error": "User not found or no active plan",
+        }
+
+    except DatabaseError as e:
+        logger.error(
+            "Database error getting extraction limit status", user_id=user_id, error=str(e)
+        )
+        return {"can_extract": False, "error": f"Database error: {str(e)}"}
+    except Exception as e:
+        logger.error(
+            "Unexpected error getting extraction limit status", user_id=user_id, error=str(e)
+        )
+        return {"can_extract": False, "error": f"Unexpected error: {str(e)}"}

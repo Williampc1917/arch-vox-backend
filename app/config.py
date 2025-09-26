@@ -33,6 +33,16 @@ class Settings(BaseSettings):
 
     ENCRYPTION_KEY: str | None = None
 
+    # OpenAI settings
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str = "gpt-4o"
+    OPENAI_TEMPERATURE: float = 0.0
+    OPENAI_MAX_TOKENS: int = 1000
+
+    # Email Style Configuration
+    EMAIL_STYLE_MAX_RETRIES: int = 3
+    EMAIL_STYLE_TIMEOUT_SECONDS: int = 30
+
     # =================================================================
     # DATABASE POOL SETTINGS - Simple and configurable
     # =================================================================
