@@ -1,10 +1,13 @@
 """
+# app/services/onboarding_service.py
 Onboarding service for managing user onboarding flow.
 Handles onboarding status, profile updates, and completion with Gmail integration.
 REFACTORED: Now uses database connection pool instead of direct psycopg connections.
 
 Service layer returns domain models only - API layer handles HTTP concerns.
 """
+
+from typing import Any
 
 from app.db.helpers import DatabaseError, execute_query, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -464,7 +467,8 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
     Note:
         Helper function for validation logic. Can be used by API endpoints
         for additional validation before calling update functions.
-        Now includes Gmail connection validation for completion.
+        Now includes Gmail connection validation and Email Style selection
+        validation for completion.
     """
     try:
         profile = await get_user_profile(user_id)
@@ -474,10 +478,11 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
 
         current_step = profile.onboarding_step
 
-        # Valid transitions with Gmail integration
+        # UPDATED: Valid transitions with email_style step integration
         valid_transitions = {
-            "start": ["gmail"],  # Updated: skip 'profile', go directly to gmail after name update
-            "gmail": ["completed"],  # Can complete only after Gmail connection
+            "start": ["gmail"],  # Skip 'profile', go directly to gmail after name update
+            "gmail": ["email_style"],  # CHANGED: Must select email style after gmail
+            "email_style": ["completed"],  # NEW: Can complete only after email style selection
             "completed": [],  # No further transitions
         }
 
@@ -485,7 +490,7 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
 
         # Additional validation for completion step
         if target_step == "completed" and is_valid:
-            # Check Gmail connection requirements
+            # Check Gmail connection + Email Style selection requirements
             requirements = await get_onboarding_completion_requirements(user_id)
             is_valid = requirements["can_complete"]
 
@@ -494,7 +499,40 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
                     "Onboarding transition to 'completed' blocked by requirements",
                     user_id=user_id,
                     blocking_reason=requirements["reason"],
+                    current_step=current_step,
+                    requirements_status=requirements.get("requirements", {}),
                 )
+
+        # Additional validation for email_style step
+        if target_step == "email_style" and is_valid:
+            # Ensure Gmail is properly connected before allowing email_style step
+            if not profile.gmail_connected:
+                logger.warning(
+                    "Onboarding transition to 'email_style' blocked - Gmail not connected",
+                    user_id=user_id,
+                    current_step=current_step,
+                    gmail_connected=profile.gmail_connected,
+                )
+                is_valid = False
+
+            # Double-check Gmail tokens exist (prevent inconsistent state)
+            if is_valid:
+                try:
+                    gmail_tokens_valid = await _validate_gmail_connection(user_id)
+                    if not gmail_tokens_valid:
+                        logger.warning(
+                            "Onboarding transition to 'email_style' blocked - Gmail tokens invalid",
+                            user_id=user_id,
+                            current_step=current_step,
+                        )
+                        is_valid = False
+                except Exception as token_error:
+                    logger.error(
+                        "Error validating Gmail tokens for email_style transition",
+                        user_id=user_id,
+                        error=str(token_error),
+                    )
+                    is_valid = False
 
         if not is_valid:
             logger.warning(
@@ -503,6 +541,7 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
                 current_step=current_step,
                 target_step=target_step,
                 valid_options=valid_transitions.get(current_step, []),
+                gmail_connected=profile.gmail_connected if profile else None,
             )
         else:
             logger.debug(
@@ -515,7 +554,13 @@ async def validate_onboarding_transition(user_id: str, target_step: str) -> bool
         return is_valid
 
     except Exception as e:
-        logger.error("Error validating onboarding transition", user_id=user_id, error=str(e))
+        logger.error(
+            "Error validating onboarding transition",
+            user_id=user_id,
+            target_step=target_step,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return False
 
 
@@ -573,4 +618,196 @@ async def handle_gmail_connection_failure(user_id: str, error_details: str) -> d
             "success": False,
             "message": "An error occurred while handling the connection failure",
             "next_steps": ["Please try again later or contact support"],
+        }
+
+
+# NEW: Email style step management functions
+@with_db_retry(max_retries=3, base_delay=0.1)
+async def advance_to_email_style_step(user_id: str) -> UserProfile | None:
+    """
+    Advance user to email_style step after Gmail connection.
+    Called automatically when Gmail OAuth completes successfully.
+    """
+    try:
+        query = """
+        UPDATE users
+        SET
+            onboarding_step = 'email_style',
+            updated_at = NOW()
+        WHERE
+            id = %s
+            AND onboarding_step = 'gmail'
+            AND gmail_connected = true
+            AND is_active = true
+        """
+
+        affected_rows = await execute_query(query, (user_id,))
+
+        if affected_rows == 0:
+            logger.warning("Cannot advance to email_style - user not ready", user_id=user_id)
+            return None
+
+        logger.info(
+            "Advanced to email_style step", user_id=user_id, step_transition="gmail → email_style"
+        )
+
+        return await get_user_profile(user_id)
+
+    except Exception as e:
+        logger.error("Error advancing to email_style step", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(
+            f"Failed to advance to email_style: {e}", user_id=user_id
+        ) from e
+
+
+@with_db_retry(max_retries=3, base_delay=0.1)
+async def complete_email_style_selection(
+    user_id: str, style_type: str, style_profile: dict[str, Any]
+) -> UserProfile | None:
+    """
+    Complete email style selection and allow onboarding completion.
+    Called after successful email style selection (casual/professional/custom).
+    """
+    try:
+        # This doesn't advance the step - just marks that email style is selected
+        # The step advancement happens in complete_onboarding()
+
+        logger.info(
+            "Email style selection completed",
+            user_id=user_id,
+            style_type=style_type,
+            ready_for_completion=True,
+        )
+
+        return await get_user_profile(user_id)
+
+    except Exception as e:
+        logger.error("Error completing email style selection", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(
+            f"Failed to complete email style selection: {e}", user_id=user_id
+        ) from e
+
+
+async def get_email_style_step_status(user_id: str) -> dict[str, Any]:
+    """
+    Get current email style step status for a user.
+    """
+    try:
+        # Get user profile
+        profile = await get_user_profile(user_id)
+        if not profile:
+            return {"error": "User not found"}
+
+        # Check if user is on email_style step
+        if profile.onboarding_step != "email_style":
+            return {
+                "error": f"User not on email_style step (currently on {profile.onboarding_step})",
+                "current_step": profile.onboarding_step,
+            }
+
+        # Get email style options and current selection
+        from app.services.email_style_service import get_email_style_selection_options
+
+        options_data = await get_email_style_selection_options(user_id)
+
+        return {
+            "current_step": "email_style",
+            "style_selected": options_data["current_selection"]["style_type"],
+            "available_options": options_data["available_options"],
+            "can_advance": options_data["can_advance"],
+            "rate_limit_info": options_data["available_options"]["custom"].get("rate_limit_info"),
+        }
+
+    except Exception as e:
+        logger.error("Error getting email style step status", user_id=user_id, error=str(e))
+        return {"error": f"Failed to get email style status: {e}"}
+
+
+# UPDATED: Completion requirements now include email style
+async def get_onboarding_completion_requirements(user_id: str) -> dict:
+    """Get detailed requirements for onboarding completion."""
+    try:
+        profile = await get_user_profile(user_id)
+        if not profile:
+            return {"can_complete": False, "reason": "User not found", "requirements": {}}
+
+        # Check each requirement
+        requirements = {
+            "correct_step": {
+                "required": "email_style",  # UPDATED: Now requires email_style step
+                "current": profile.onboarding_step,
+                "satisfied": profile.onboarding_step == "email_style",
+            },
+            "gmail_connected": {
+                "required": True,
+                "current": profile.gmail_connected,
+                "satisfied": profile.gmail_connected,
+            },
+            "gmail_tokens_exist": {
+                "required": True,
+                "current": None,
+                "satisfied": False,
+            },
+            "email_style_selected": {  # NEW REQUIREMENT
+                "required": True,
+                "current": None,
+                "satisfied": False,
+            },
+        }
+
+        # Validate Gmail tokens exist
+        try:
+            has_tokens = await _validate_gmail_connection(user_id)
+            requirements["gmail_tokens_exist"]["current"] = has_tokens
+            requirements["gmail_tokens_exist"]["satisfied"] = has_tokens
+        except OnboardingServiceError:
+            requirements["gmail_tokens_exist"]["current"] = False
+            requirements["gmail_tokens_exist"]["satisfied"] = False
+
+        # Validate email style selection
+        try:
+            from app.services.email_style_service import get_user_email_style
+
+            email_style = await get_user_email_style(user_id)
+            has_style = email_style is not None and email_style.get("style_type") is not None
+            requirements["email_style_selected"]["current"] = has_style
+            requirements["email_style_selected"]["satisfied"] = has_style
+        except Exception:
+            requirements["email_style_selected"]["current"] = False
+            requirements["email_style_selected"]["satisfied"] = False
+
+        # Overall completion eligibility
+        can_complete = all(req["satisfied"] for req in requirements.values())
+
+        # Determine blocking reason if any
+        blocking_reason = None
+        if not can_complete:
+            if not requirements["correct_step"]["satisfied"]:
+                blocking_reason = f"Must be on 'email_style' onboarding step (currently on '{profile.onboarding_step}')"
+            elif not requirements["gmail_connected"]["satisfied"]:
+                blocking_reason = "Gmail account must be connected"
+            elif not requirements["gmail_tokens_exist"]["satisfied"]:
+                blocking_reason = "Gmail connection is invalid - please reconnect Gmail"
+            elif not requirements["email_style_selected"]["satisfied"]:
+                blocking_reason = "Email style must be selected"
+
+        return {
+            "can_complete": can_complete,
+            "reason": blocking_reason,
+            "requirements": requirements,
+            "user_profile": {
+                "onboarding_step": profile.onboarding_step,
+                "gmail_connected": profile.gmail_connected,
+                "onboarding_completed": profile.onboarding_completed,
+            },
+        }
+
+    except Exception as e:
+        logger.error(
+            "Error checking onboarding completion requirements", user_id=user_id, error=str(e)
+        )
+        return {
+            "can_complete": False,
+            "reason": f"Error checking requirements: {str(e)}",
+            "requirements": {},
         }

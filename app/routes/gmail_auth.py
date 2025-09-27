@@ -139,42 +139,108 @@ async def oauth_callback(
         result = await complete_gmail_oauth(user_id=user_id, code=request.code, state=request.state)
 
         if result["success"]:
-            # Determine navigation instruction based on onboarding status
+            # Check current onboarding status and advance accordingly
             onboarding_completed = result["onboarding_completed"]
             onboarding_step = result.get("onboarding_step", "completed")
 
-            # Backend-driven navigation logic
+            # Handle based on current onboarding step
             if onboarding_completed:
+                # User already completed onboarding before - just confirm connection
                 next_step = "redirect_to_main_app"
                 message = "Gmail connected successfully! You can now use voice features to manage your email."
-            elif onboarding_step == "gmail":
-                next_step = "stay_on_gmail"
-                message = (
-                    "Gmail connected successfully! Please complete your profile setup to continue."
+
+                response = GmailAuthCallbackResponse(
+                    success=True,
+                    message=message,
+                    gmail_connected=True,
+                    next_step=next_step,
+                    onboarding_completed=True,
                 )
+
+            elif onboarding_step == "gmail":
+                # User is on gmail step - advance to email_style step
+                from app.services.onboarding_service import advance_to_email_style_step
+
+                updated_profile = await advance_to_email_style_step(user_id)
+
+                if updated_profile and updated_profile.onboarding_step == "email_style":
+                    logger.info(
+                        "User advanced to email_style step after Gmail connection",
+                        user_id=user_id,
+                        next_required_step="email_style_selection",
+                    )
+
+                    response = GmailAuthCallbackResponse(
+                        success=True,
+                        message="Gmail connected successfully! Please select your email style to continue.",
+                        gmail_connected=True,
+                        next_step="go_to_email_style_step",
+                        onboarding_completed=False,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to advance to email_style step after Gmail connection",
+                        user_id=user_id,
+                    )
+                    response = GmailAuthCallbackResponse(
+                        success=False,
+                        message="Gmail connected but failed to advance onboarding. Please try again.",
+                        gmail_connected=True,
+                        next_step="stay_on_gmail",
+                        onboarding_completed=False,
+                    )
+
             elif onboarding_step == "profile":
+                # User somehow connected Gmail before completing profile - unusual but handle it
                 next_step = "go_to_profile_step"
                 message = (
                     "Gmail connected successfully! Please complete your profile setup to continue."
                 )
-            else:
-                # Fallback for unexpected states
-                next_step = "redirect_to_main_app"
-                message = "Gmail connected successfully! You can now use voice features to manage your email."
 
-            response = GmailAuthCallbackResponse(
-                success=True,
-                message=message,
-                gmail_connected=True,
-                next_step=next_step,
-                onboarding_completed=onboarding_completed,
-            )
+                response = GmailAuthCallbackResponse(
+                    success=True,
+                    message=message,
+                    gmail_connected=True,
+                    next_step=next_step,
+                    onboarding_completed=False,
+                )
+
+            else:
+                # Better fallback handling for unexpected states
+                logger.warning(
+                    "Unexpected onboarding step after Gmail connection",
+                    user_id=user_id,
+                    onboarding_step=onboarding_step,
+                    onboarding_completed=onboarding_completed,
+                )
+
+                # Try to handle gracefully based on step
+                if onboarding_step in ["email_style", "completed"]:
+                    next_step = "redirect_to_main_app"
+                    message = "Gmail connected successfully! You can now use voice features to manage your email."
+                    response = GmailAuthCallbackResponse(
+                        success=True,
+                        message=message,
+                        gmail_connected=True,
+                        next_step=next_step,
+                        onboarding_completed=onboarding_completed,
+                    )
+                else:
+                    next_step = "stay_on_gmail"
+                    message = "Gmail connected successfully! Please continue with your setup."
+                    response = GmailAuthCallbackResponse(
+                        success=True,
+                        message=message,
+                        gmail_connected=True,
+                        next_step=next_step,
+                        onboarding_completed=False,
+                    )
 
             logger.info(
                 "Gmail OAuth callback completed successfully",
                 user_id=user_id,
-                next_step=next_step,
-                onboarding_completed=onboarding_completed,
+                next_step=response.next_step,
+                onboarding_completed=response.onboarding_completed,
             )
 
             return response

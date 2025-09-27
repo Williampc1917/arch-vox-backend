@@ -496,13 +496,17 @@ async def get_users_needing_gmail_attention() -> list:
                 issue_type = "missing_tokens"
             elif failure_count and failure_count >= 3:
                 issue_type = "refresh_failures"
-            elif (
-                expires_at
-                and expires_at < datetime.now(UTC)
-                and failure_count
-                and failure_count > 0
-            ):
-                issue_type = "expired_with_failures"
+            elif expires_at and failure_count and failure_count > 0:
+                # Ensure timezone compatibility for comparison
+                now = datetime.now(UTC)
+                expires_at_utc = expires_at
+                if expires_at_utc.tzinfo is None:
+                    expires_at_utc = expires_at_utc.replace(tzinfo=UTC)
+                elif expires_at_utc.tzinfo != UTC:
+                    expires_at_utc = expires_at_utc.astimezone(UTC)
+
+                if expires_at_utc < now:
+                    issue_type = "expired_with_failures"
 
             users_needing_attention.append(
                 {

@@ -1,3 +1,5 @@
+# app/models/domain/user_domain.py - UPDATE THIS LINE
+
 from datetime import datetime
 from typing import Any, Literal
 
@@ -21,11 +23,11 @@ class UserProfile(BaseModel):
     display_name: str | None
     is_active: bool
 
-    # ADD THESE ONBOARDING FIELDS:
+    # UPDATED: Add email_style to onboarding steps
     timezone: str = "UTC"
     onboarding_completed: bool = False
     gmail_connected: bool = False
-    onboarding_step: Literal["start", "profile", "gmail", "completed"] = "start"
+    onboarding_step: Literal["start", "profile", "gmail", "email_style", "completed"] = "start"
 
     voice_preferences: dict[str, Any]
     plan: Plan
@@ -40,7 +42,7 @@ class UserProfile(BaseModel):
     gmail_last_refresh_attempt: datetime | None = None
     gmail_needs_refresh: bool = False
 
-    # Just add connection status
+    # Calendar connection status
     calendar_connected: bool = False
 
     # Runtime calendar health (not stored in DB)

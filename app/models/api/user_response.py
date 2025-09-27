@@ -1,5 +1,9 @@
+# app/models/api/user_response.py
 from datetime import datetime
-from typing import Literal
+from typing import (
+    Any,  # Add Any if it's missing
+    Literal,
+)
 
 from pydantic import BaseModel, Field
 
@@ -50,3 +54,36 @@ class OnboardingCompleteResponse(BaseModel):
     success: bool
     message: str
     user_profile: UserProfile
+
+
+# Add these to the END of app/models/api/user_response.py
+
+
+class EmailStyleStatusResponse(BaseModel):
+    """Response for GET /onboarding/email-style"""
+
+    current_step: str
+    style_selected: str | None
+    available_options: list[dict[str, Any]]
+    can_advance: bool
+    rate_limit_info: dict[str, Any] | None
+
+
+class EmailStyleSelectionResponse(BaseModel):
+    """Response for PUT /onboarding/email-style (casual/professional)"""
+
+    success: bool
+    style_type: str
+    next_step: Literal["completed"]
+    message: str
+
+
+class CustomEmailStyleResponse(BaseModel):
+    """Response for POST /onboarding/email-style/custom"""
+
+    success: bool
+    style_profile: dict[str, Any] | None
+    extraction_grade: str | None
+    error_message: str | None
+    rate_limit_info: dict[str, Any] | None
+    next_step: Literal["completed"] | None

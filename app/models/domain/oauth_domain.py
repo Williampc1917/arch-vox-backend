@@ -25,14 +25,34 @@ class OAuthToken(BaseModel):
         """Check if access token is expired."""
         if not self.expires_at:
             return False
-        return datetime.now(UTC) >= self.expires_at
+
+        # Ensure timezone compatibility
+        now = datetime.now(UTC)
+        expires_at = self.expires_at
+
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        elif expires_at.tzinfo != UTC:
+            expires_at = expires_at.astimezone(UTC)
+
+        return now >= expires_at
 
     def needs_refresh(self, buffer_minutes: int = 5) -> bool:
         """Check if token should be refreshed soon."""
         if not self.expires_at:
             return False
-        buffer_time = datetime.now(UTC) + timedelta(minutes=buffer_minutes)
-        return buffer_time >= self.expires_at
+
+        # Ensure timezone compatibility
+        now = datetime.now(UTC)
+        buffer_time = now + timedelta(minutes=buffer_minutes)
+        expires_at = self.expires_at
+
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        elif expires_at.tzinfo != UTC:
+            expires_at = expires_at.astimezone(UTC)
+
+        return buffer_time >= expires_at
 
     def has_gmail_access(self) -> bool:
         """Check if token has Gmail API access."""

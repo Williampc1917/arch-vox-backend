@@ -195,14 +195,24 @@ class GmailAuthStatusResponse(BaseModel):
 
 
 class GmailAuthCallbackResponse(BaseModel):
-    """Legacy Gmail-only callback response (deprecated - use GoogleServicesAuthCallbackResponse)."""
+    """Response after Google OAuth callback for Gmail + Calendar."""
 
     success: bool
     message: str
     gmail_connected: bool
+
+    # UPDATE THIS LINE - Add "go_to_email_style_step" to the Literal
     next_step: (
-        Literal["stay_on_gmail", "redirect_to_main_app", "go_to_profile_step", "completed"] | None
+        Literal[
+            "stay_on_gmail",
+            "redirect_to_main_app",
+            "go_to_profile_step",
+            "go_to_email_style_step",  # ← ADD THIS LINE
+            "completed",
+        ]
+        | None
     ) = None
+
     onboarding_completed: bool = Field(
         default=False, description="Whether onboarding is now complete"
     )
