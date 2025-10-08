@@ -261,18 +261,28 @@ async def select_email_style(
 
         await complete_email_style_selection(user_id, result["style_type"], result["style_profile"])
 
-        response = EmailStyleSelectionResponse(
+        # NEW: Actually complete onboarding now that email style is selected
+        try:
+            completed_profile = await complete_onboarding(user_id)
+            if completed_profile:
+                next_step = "completed"
+            else:
+                next_step = "email_style"  # Fallback
+        except Exception as e:
+            next_step = "email_style"  # Fallback
+            logger.error(
+                "Failed to complete onboarding after email style selection",
+                user_id=user_id,
+                error=str(e),
+            )
+
+        # Return response with actual next_step
+        return EmailStyleSelectionResponse(
             success=True,
             style_type=result["style_type"],
-            next_step="completed",
+            next_step=next_step,  # Use actual completion result
             message=result["message"],
         )
-
-        logger.info(
-            "Email style selected successfully", user_id=user_id, style_type=request.style_type
-        )
-
-        return response
 
     except HTTPException:
         raise
@@ -352,19 +362,44 @@ async def create_custom_email_style(
 
         await complete_email_style_selection(user_id, result["style_type"], result["style_profile"])
 
+        # NEW: Actually complete onboarding now that email style is selected
+        try:
+            completed_profile = await complete_onboarding(user_id)
+            if completed_profile:
+                next_step = "completed"
+                logger.info(
+                    "Onboarding completed after custom email style creation",
+                    user_id=user_id,
+                    extraction_grade=result.get("extraction_grade"),
+                )
+            else:
+                next_step = "email_style"  # Fallback if completion failed
+                logger.warning(
+                    "Email style created but onboarding completion failed",
+                    user_id=user_id,
+                )
+        except Exception as e:
+            next_step = "email_style"  # Fallback if completion failed
+            logger.error(
+                "Failed to complete onboarding after email style creation",
+                user_id=user_id,
+                error=str(e),
+            )
+
         response = CustomEmailStyleResponse(
             success=True,
             style_profile=result["style_profile"],
             extraction_grade=result.get("extraction_grade"),
             error_message=None,
             rate_limit_info=None,
-            next_step="completed",
+            next_step=next_step,  # Use the actual completion result
         )
 
         logger.info(
             "Custom email style created successfully",
             user_id=user_id,
             extraction_grade=result.get("extraction_grade"),
+            next_step=next_step,
         )
 
         return response
@@ -382,3 +417,52 @@ async def create_custom_email_style(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create custom email style",
         )
+
+
+# Add this endpoint to app/routes/onboarding.py
+# Place it after the existing /onboarding/health endpoint
+
+
+@router.get("/email-style/health")
+async def email_style_health():
+    """
+    Health check for email style services including OpenAI connectivity.
+    Public endpoint - no auth required.
+    """
+    try:
+        from app.services.email_style_rate_limiter import email_style_rate_limiter_health
+        from app.services.email_style_service import email_style_service_health
+        from app.services.openai_service import openai_service_health
+
+        # Run all health checks
+        openai_health = await openai_service_health()
+        style_service_health = await email_style_service_health()
+        rate_limiter_health = await email_style_rate_limiter_health()
+
+        # Determine overall status
+        all_healthy = all(
+            [
+                openai_health.get("healthy", False),
+                style_service_health.get("healthy", False),
+                rate_limiter_health.get("healthy", False),
+            ]
+        )
+
+        return {
+            "status": "ok" if all_healthy else "degraded",
+            "service": "email_style_system",
+            "components": {
+                "openai": openai_health,
+                "style_service": style_service_health,
+                "rate_limiter": rate_limiter_health,
+            },
+            "endpoints": [
+                "GET /onboarding/email-style",
+                "PUT /onboarding/email-style",
+                "POST /onboarding/email-style/custom",
+            ],
+        }
+
+    except Exception as e:
+        logger.error("Email style health check failed", error=str(e))
+        return {"status": "error", "service": "email_style_system", "error": str(e)}

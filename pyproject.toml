@@ -32,6 +32,9 @@ dependencies = [
     
     # Logging & Observability
     "structlog>=23.2.0",
+
+    # OpenAI API
+    "openai>=1.0.0"
 ]
 
 [project.optional-dependencies]

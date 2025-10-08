@@ -540,32 +540,32 @@ class EmailStyleService:
             # Step 3: Extract custom style using OpenAI
             try:
                 from app.services.openai_service import extract_custom_email_style
-                
+
                 openai_result = await extract_custom_email_style(email_examples)
-                
+
                 extraction_success = True
                 extraction_result = openai_result["style_profile"]
                 extraction_grade = openai_result["extraction_grade"]
                 extraction_error = None
-                
+
                 logger.info(
                     "OpenAI extraction completed successfully",
                     user_id=user_id,
                     extraction_grade=extraction_grade,
-                    style_profile_keys=list(extraction_result.keys()) if extraction_result else []
+                    style_profile_keys=list(extraction_result.keys()) if extraction_result else [],
                 )
-                
+
             except Exception as openai_error:
                 extraction_success = False
                 extraction_result = {}
                 extraction_grade = "C"
                 extraction_error = f"OpenAI extraction failed: {str(openai_error)}"
-                
+
                 logger.error(
                     "OpenAI extraction failed",
                     user_id=user_id,
                     error=str(openai_error),
-                    error_type=type(openai_error).__name__
+                    error_type=type(openai_error).__name__,
                 )
 
             # Step 4: Always record the attempt (OpenAI charges even for failures)
@@ -596,11 +596,11 @@ class EmailStyleService:
                     # TO THIS:
                     return {
                         "success": True,
-                        "style_type": "custom", 
+                        "style_type": "custom",
                         "style_profile": extraction_result,
                         "extraction_grade": extraction_grade,  # ✅ Use actual grade from OpenAI
                         "message": f"Custom email style created successfully! Quality grade: {extraction_grade}",
-}
+                    }
                 else:
                     return {
                         "success": False,

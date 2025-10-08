@@ -34,7 +34,7 @@ class UserProfileResponse(BaseModel):
 class OnboardingStatusResponse(BaseModel):
     """Response for GET /onboarding/status"""
 
-    step: Literal["start", "profile", "gmail", "completed"]
+    step: Literal["start", "profile", "gmail", "email_style", "completed"]
     onboarding_completed: bool
     gmail_connected: bool
     timezone: str

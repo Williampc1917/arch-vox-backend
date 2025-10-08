@@ -158,7 +158,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 
 ### Analysis Process (complete in order):
 1. **Scan ALL emails first** to identify patterns before categorizing
-2. **Count occurrences explicitly** for phrases and transitions  
+2. **Count occurrences explicitly** for phrases and transitions
 3. **Calculate percentages** for mixed behaviors
 4. **Verify against rules** before finalizing
 
@@ -173,7 +173,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 
 **subject_style.reply_behavior** → Count-Based Classification:
 - Count emails with "Re:" vs total emails
-- If 100% use "Re:" → "uses_re_prefix"  
+- If 100% use "Re:" → "uses_re_prefix"
 - If 0% use "Re:" → "custom_descriptive"
 - If mixed percentage → "mixed"
 
@@ -200,7 +200,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 
 **writing_style.paragraph_style** → Sentence Count per Paragraph:
 - "single_line": each paragraph = 1 sentence
-- "short_paragraphs": 2-4 sentences per paragraph  
+- "short_paragraphs": 2-4 sentences per paragraph
 - "long_paragraphs": 5+ sentences per paragraph
 
 ### Verification Checklist (complete before output):
@@ -213,7 +213,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 ### Common Mistakes to Avoid:
 - "Hope you're doing well" → NOT a transition word (pleasantry)
 - Single occurrence → NOT a common phrase (needs ≥2)
-- 1 "Re:" out of 3 emails → "mixed" not "uses_re_prefix" 
+- 1 "Re:" out of 3 emails → "mixed" not "uses_re_prefix"
 - Using specific greeting word → extract structural pattern instead
 
 ### Analysis Examples (for calibration):
@@ -224,7 +224,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 - Extract: "[Greeting] [name]," (generalized pattern)
 
 **Reply Behavior Calculation:**
-- Email types: Email1=NEW, Email2=REPLY(Re:), Email3=NEW  
+- Email types: Email1=NEW, Email2=REPLY(Re:), Email3=NEW
 - Count: 1 reply / 3 total = 33% use "Re:"
 - Result: "mixed" (not 100% either pattern)
 
@@ -234,7 +234,7 @@ You are a style-extraction engine. Analyze example emails and produce a structur
 
 **Closing Name Analysis:**
 - "Talk soon, Jordan" → includes name ✓
-- "Best regards," → no name   
+- "Best regards," → no name
 - "Thanks, Alex" → includes name ✓
 - Check: Do closings end with sender's name? If ANY include name → true"""
 

@@ -511,12 +511,8 @@ class GmailConnectionService:
                 SET gmail_connected = %s,
                     onboarding_step = CASE
                         WHEN onboarding_step = 'profile' THEN 'gmail'
-                        WHEN onboarding_step = 'gmail' THEN 'completed'
+                        WHEN onboarding_step = 'gmail' THEN 'email_style'
                         ELSE onboarding_step
-                    END,
-                    onboarding_completed = CASE
-                        WHEN onboarding_step = 'gmail' THEN true
-                        ELSE onboarding_completed
                     END,
                     updated_at = NOW()
                 WHERE id = %s AND is_active = true
@@ -954,12 +950,8 @@ class GmailConnectionService:
                 SET gmail_connected = %s,
                     onboarding_step = CASE
                         WHEN onboarding_step = 'profile' THEN 'gmail'
-                        WHEN onboarding_step = 'gmail' THEN 'completed'
+                        WHEN onboarding_step = 'gmail' THEN 'email_style'
                         ELSE onboarding_step
-                    END,
-                    onboarding_completed = CASE
-                        WHEN onboarding_step = 'gmail' THEN true
-                        ELSE onboarding_completed
                     END,
                     updated_at = NOW()
                 WHERE id = %s AND is_active = true

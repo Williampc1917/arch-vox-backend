@@ -146,12 +146,13 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         OnboardingServiceError: If completion fails due to system errors
 
     Prerequisites:
-        - User must be on 'gmail' step
-        - User must have gmail_connected = true (ENFORCED via Gmail OAuth integration)
+        - User must be on 'email_style' step (UPDATED)
+        - User must have gmail_connected = true
+        - User must have selected an email style
 
     Note:
-        This function now strictly validates Gmail connection before allowing
-        onboarding completion, ensuring users have connected Gmail successfully.
+        This function now validates email style selection before allowing
+        onboarding completion, ensuring users have selected an email style.
     """
     try:
         # First, validate prerequisites with detailed logging
@@ -160,13 +161,13 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
             logger.warning("Onboarding completion failed - user not found", user_id=user_id)
             raise OnboardingServiceError("User not found", user_id=user_id)
 
-        # Validate current onboarding step
-        if profile.onboarding_step != "gmail":
+        # Validate current onboarding step (UPDATED)
+        if profile.onboarding_step != "email_style":
             logger.warning(
                 "Onboarding completion failed - invalid step",
                 user_id=user_id,
                 current_step=profile.onboarding_step,
-                required_step="gmail",
+                required_step="email_style",
             )
             raise OnboardingServiceError(
                 f"Invalid onboarding step: {profile.onboarding_step}", user_id=user_id
@@ -193,10 +194,29 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
             await _fix_gmail_connection_state(user_id)
             raise OnboardingServiceError("Gmail connection invalid", user_id=user_id)
 
+        # NEW: Validate email style selection
+        try:
+            from app.services.email_style_service import get_user_email_style
+
+            email_style = await get_user_email_style(user_id)
+            if not email_style or not email_style.get("style_type"):
+                logger.warning(
+                    "Onboarding completion failed - no email style selected",
+                    user_id=user_id,
+                )
+                raise OnboardingServiceError("Email style not selected", user_id=user_id)
+        except Exception as e:
+            logger.warning(
+                "Onboarding completion failed - email style validation error",
+                user_id=user_id,
+                error=str(e),
+            )
+            raise OnboardingServiceError("Email style validation failed", user_id=user_id)
+
         # Check Calendar permissions from OAuth tokens
         calendar_connected = await _check_calendar_permissions(user_id)
 
-        # All prerequisites met - proceed with completion
+        # All prerequisites met - proceed with completion (UPDATED)
         query = """
         UPDATE users
         SET
@@ -206,7 +226,7 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
             updated_at = NOW()
         WHERE
             id = %s
-            AND onboarding_step = 'gmail'
+            AND onboarding_step = 'email_style'  -- UPDATED
             AND gmail_connected = true
             AND is_active = true
         """
@@ -225,7 +245,7 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         logger.info(
             "Onboarding completed successfully",
             user_id=user_id,
-            step_transition="gmail → completed",
+            step_transition="email_style → completed",  # UPDATED
             gmail_connected=True,
             calendar_connected=calendar_connected,
         )
@@ -339,7 +359,7 @@ async def _check_calendar_permissions(user_id: str) -> bool:
         # Get OAuth tokens for the user
         from app.services.token_service import get_oauth_tokens
 
-        oauth_tokens = await get_oauth_tokens(user_id, "google")
+        oauth_tokens = await get_oauth_tokens(user_id)
         if not oauth_tokens:
             logger.debug("No OAuth tokens found for calendar permission check", user_id=user_id)
             return False

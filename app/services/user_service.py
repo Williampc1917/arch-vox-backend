@@ -31,7 +31,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
         u.calendar_connected,
         u.created_at, u.updated_at,
         us.voice_preferences,
-        p.name as plan_name, p.max_daily_requests,
+        p.name as plan_name, p.daily_email_extractions,
         -- Gmail token information for health assessment
         ot.expires_at as token_expires_at,
         ot.refresh_failure_count,
@@ -69,7 +69,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
             updated_at,
             voice_preferences,
             plan_name,
-            max_daily_requests,
+            daily_email_extractions,
             token_expires_at,
             refresh_failure_count,
             last_refresh_attempt,
@@ -79,7 +79,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
         # Build domain objects
         plan = Plan(
             name=plan_name or "free",
-            max_daily_requests=max_daily_requests or 100,
+            max_daily_requests=daily_email_extractions or 100,
         )
 
         # Create enhanced user profile with Gmail health

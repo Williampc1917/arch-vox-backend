@@ -258,7 +258,7 @@ async def get_user_plan_limits(user_id: str) -> dict[str, Any] | None:
         dict with plan limits or None if user not found
     """
     query = """
-    SELECT 
+    SELECT
         p.name as plan_name,
         p.daily_minutes,
         p.daily_email_extractions
@@ -297,7 +297,7 @@ async def get_daily_extraction_usage(user_id: str, usage_date: str = None) -> di
         usage_date = datetime.now(UTC).date()
 
     query = """
-    SELECT 
+    SELECT
         email_extractions_used,
         updated_at
     FROM daily_usage
@@ -337,8 +337,8 @@ async def increment_extraction_counter(user_id: str) -> bool:
         ) VALUES (
             %s, CURRENT_DATE, 1, NOW()
         )
-        ON CONFLICT (user_id, usage_date) 
-        DO UPDATE SET 
+        ON CONFLICT (user_id, usage_date)
+        DO UPDATE SET
             email_extractions_used = daily_usage.email_extractions_used + 1,
             updated_at = NOW()
         """
@@ -373,8 +373,8 @@ async def store_email_style_preferences(user_id: str, preferences: dict[str, Any
         import json
 
         query = """
-        UPDATE user_settings 
-        SET 
+        UPDATE user_settings
+        SET
             email_style_preferences = %s,
             updated_at = NOW()
         WHERE user_id = %s
@@ -449,7 +449,7 @@ async def get_user_extraction_limit_status(user_id: str) -> dict[str, Any]:
     """
     try:
         query = """
-        SELECT 
+        SELECT
             p.daily_email_extractions as daily_limit,
             p.name as plan_name,
             COALESCE(du.email_extractions_used, 0) as used_today,
