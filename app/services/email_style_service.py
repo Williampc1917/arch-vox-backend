@@ -1,11 +1,11 @@
 # app/services/email_style_service.py
 """
 Email Style Service
-Handles email style management including predefined profiles, validation, and storage.
+Handles 3-profile email style management including validation and storage.
 """
 
 import re
-from typing import Any, Literal
+from typing import Any
 
 from app.db.helpers import (
     get_email_style_preferences,
@@ -39,125 +39,20 @@ class InvalidEmailExamples(EmailStyleError):
 
 class EmailStyleService:
     """
-    Service for managing email styles including predefined and custom styles.
+    Service for managing 3-profile email styles.
 
     Handles validation, storage, and retrieval of email style preferences.
     """
 
     def __init__(self):
-        logger.info("Email style service initialized")
+        logger.info("Email style service initialized for 3-profile system")
 
-    def get_predefined_style_profile(
-        self, style_type: Literal["casual", "professional"]
-    ) -> dict[str, Any]:
+    async def validate_email_examples(self, labeled_emails: dict[str, str]) -> dict[str, Any]:
         """
-        Get predefined style profile from documentation.
+        Validate labeled email examples for 3-profile extraction.
 
         Args:
-            style_type: Either "casual" or "professional"
-
-        Returns:
-            dict: Complete style profile JSON
-
-        Raises:
-            EmailStyleError: If invalid style type provided
-        """
-        try:
-            if style_type == "casual":
-                return self._get_casual_style_profile()
-            elif style_type == "professional":
-                return self._get_professional_style_profile()
-            else:
-                raise EmailStyleError(f"Invalid predefined style type: {style_type}")
-
-        except Exception as e:
-            logger.error(
-                "Error getting predefined style profile", style_type=style_type, error=str(e)
-            )
-            raise EmailStyleError(f"Failed to get predefined style: {e}") from e
-
-    def _get_casual_style_profile(self) -> dict[str, Any]:
-        """Get casual style profile from documentation."""
-        return {
-            "greeting": {"style": "Hey [name]!", "warmth": "friendly"},
-            "closing": {"styles": ["Thanks!", "Talk soon!", "Cheers!"], "includes_name": False},
-            "subject_style": {
-                "reply_behavior": "uses_re_prefix",
-                "new_email_style": "direct",
-                "tone": "casual",
-                "length": "short",
-                "uses_action_words": False,
-                "capitalization": "sentence_case",
-            },
-            "tone": {"formality": 1, "directness": 5, "enthusiasm": 4, "politeness": 3},
-            "writing_style": {
-                "sentence_length": "short",
-                "paragraph_style": "single_line",
-                "punctuation": "exclamation_heavy",
-                "capitalization": "casual",
-            },
-            "vocabulary": {
-                "complexity": "simple",
-                "common_phrases": ["sounds good", "no worries", "let me know", "thanks a bunch"],
-                "filler_words": ["just", "totally", "really"],
-                "transition_words": ["so", "but", "anyway"],
-            },
-            "personal_touches": {
-                "uses_emojis": True,
-                "shares_context": True,
-                "asks_questions": True,
-                "uses_humor": True,
-            },
-        }
-
-    def _get_professional_style_profile(self) -> dict[str, Any]:
-        """Get professional style profile from documentation."""
-        return {
-            "greeting": {"style": "Dear [name],", "warmth": "professional"},
-            "closing": {
-                "styles": ["Best regards,", "Sincerely,", "Thank you,"],
-                "includes_name": True,
-            },
-            "subject_style": {
-                "reply_behavior": "uses_re_prefix",
-                "new_email_style": "professional",
-                "tone": "professional",
-                "length": "medium",
-                "uses_action_words": True,
-                "capitalization": "title_case",
-            },
-            "tone": {"formality": 5, "directness": 4, "enthusiasm": 2, "politeness": 5},
-            "writing_style": {
-                "sentence_length": "long",
-                "paragraph_style": "long_paragraphs",
-                "punctuation": "standard",
-                "capitalization": "standard",
-            },
-            "vocabulary": {
-                "complexity": "professional",
-                "common_phrases": [
-                    "I hope this email finds you well",
-                    "please let me know",
-                    "I look forward to",
-                    "thank you for your time",
-                ],
-                "filler_words": [],
-                "transition_words": ["however", "additionally", "furthermore", "therefore"],
-            },
-            "personal_touches": {
-                "uses_emojis": False,
-                "shares_context": False,
-                "asks_questions": False,
-                "uses_humor": False,
-            },
-        }
-
-    async def validate_email_examples(self, email_examples: list[str]) -> dict[str, Any]:
-        """
-        Validate email examples for custom style extraction.
-
-        Args:
-            email_examples: List of 3 email examples (subject + body)
+            labeled_emails: {"professional": "...", "casual": "...", "friendly": "..."}
 
         Returns:
             dict: Validation results with issues found
@@ -168,38 +63,40 @@ class EmailStyleService:
         try:
             validation_result = {"valid": True, "issues": [], "warnings": []}
 
-            # Check count
-            if len(email_examples) != 3:
-                validation_result["valid"] = False
-                validation_result["issues"].append(
-                    f"Expected 3 email examples, got {len(email_examples)}"
-                )
+            # Check all 3 required labels exist
+            required_labels = ["professional", "casual", "friendly"]
+            for label in required_labels:
+                if label not in labeled_emails:
+                    validation_result["valid"] = False
+                    validation_result["issues"].append(f"Missing {label} email")
+                    continue
 
-            for i, email in enumerate(email_examples, 1):
+                email = labeled_emails[label]
+
                 # Check if email is not empty
                 if not email or not email.strip():
                     validation_result["valid"] = False
-                    validation_result["issues"].append(f"Email {i} is empty")
+                    validation_result["issues"].append(f"{label.title()} email is empty")
                     continue
 
                 # Check minimum length (should have subject + substantial body)
                 if len(email.strip()) < 50:
                     validation_result["valid"] = False
                     validation_result["issues"].append(
-                        f"Email {i} too short (minimum 50 characters)"
+                        f"{label.title()} email too short (minimum 50 characters)"
                     )
 
                 # Check if it has both subject and body structure
                 if not self._has_email_structure(email):
                     validation_result["warnings"].append(
-                        f"Email {i} may be missing subject or proper structure"
+                        f"{label.title()} email may be missing subject or proper structure"
                     )
 
                 # Check for suspicious content
                 if self._has_suspicious_content(email):
                     validation_result["valid"] = False
                     validation_result["issues"].append(
-                        f"Email {i} contains suspicious or inappropriate content"
+                        f"{label.title()} email contains suspicious or inappropriate content"
                     )
 
             # Final validation
@@ -208,8 +105,8 @@ class EmailStyleService:
                 raise InvalidEmailExamples(f"Email examples validation failed: {issues_text}")
 
             logger.info(
-                "Email examples validated successfully",
-                example_count=len(email_examples),
+                "Labeled email examples validated successfully",
+                email_labels=list(labeled_emails.keys()),
                 warnings_count=len(validation_result["warnings"]),
             )
 
@@ -270,16 +167,16 @@ class EmailStyleService:
     async def store_user_email_style(
         self,
         user_id: str,
-        style_type: Literal["casual", "professional", "custom"],
-        style_profile: dict[str, Any],
+        style_profiles: dict[str, Any],
+        extraction_grades: dict[str, str] | None = None,
     ) -> bool:
         """
-        Store user's email style preferences in database.
+        Store user's 3 email style profiles in database.
 
         Args:
             user_id: UUID string of the user
-            style_type: Type of style selected
-            style_profile: Complete style profile data
+            style_profiles: {"professional": {...}, "casual": {...}, "friendly": {...}}
+            extraction_grades: {"professional": "A", "casual": "B", "friendly": "A"}
 
         Returns:
             bool: True if storage successful
@@ -288,13 +185,25 @@ class EmailStyleService:
             EmailStyleError: If storage fails
         """
         try:
+            # Validate all 3 profiles exist
+            required_types = ["professional", "casual", "friendly"]
+            for style_type in required_types:
+                if style_type not in style_profiles:
+                    raise EmailStyleError(f"Missing {style_type} profile", user_id=user_id)
+
             # Prepare preferences structure
             preferences = {
-                "style_type": style_type,
-                "style_profile": style_profile,
+                "styles": style_profiles,  # All 3 profiles
                 "created_at": self._get_current_timestamp(),
-                "version": "1.0",  # For future migrations
+                "version": "2.0",
             }
+
+            # Add extraction metadata if grades provided
+            if extraction_grades:
+                preferences["extraction_metadata"] = {
+                    "grades": extraction_grades,
+                    "extraction_timestamp": self._get_current_timestamp(),
+                }
 
             # Store in database
             success = await store_email_style_preferences(user_id, preferences)
@@ -303,29 +212,32 @@ class EmailStyleService:
                 raise EmailStyleError("Database storage failed", user_id=user_id)
 
             logger.info(
-                "Email style stored successfully",
+                "3 email styles stored successfully",
                 user_id=user_id,
-                style_type=style_type,
-                has_custom_profile=style_type == "custom",
+                style_types=list(style_profiles.keys()),
+                grades=extraction_grades,
             )
 
             return True
 
         except Exception as e:
             logger.error(
-                "Error storing email style", user_id=user_id, style_type=style_type, error=str(e)
+                "Error storing email styles",
+                user_id=user_id,
+                style_types=list(style_profiles.keys()) if style_profiles else [],
+                error=str(e),
             )
-            raise EmailStyleError(f"Failed to store email style: {e}", user_id=user_id) from e
+            raise EmailStyleError(f"Failed to store email styles: {e}", user_id=user_id) from e
 
     async def get_user_email_style_preferences(self, user_id: str) -> dict[str, Any] | None:
         """
-        Get user's current email style preferences.
+        Get user's current email style preferences (all 3 profiles).
 
         Args:
             user_id: UUID string of the user
 
         Returns:
-            dict: Email style preferences or None if not found
+            dict: Email style preferences with all 3 profiles or None if not found
         """
         try:
             preferences = await get_email_style_preferences(user_id)
@@ -334,7 +246,8 @@ class EmailStyleService:
                 logger.debug(
                     "Email style preferences retrieved",
                     user_id=user_id,
-                    style_type=preferences.get("style_type"),
+                    version=preferences.get("version"),
+                    has_styles=bool(preferences.get("styles")),
                 )
             else:
                 logger.debug("No email style preferences found", user_id=user_id)
@@ -349,19 +262,32 @@ class EmailStyleService:
 
     async def get_email_style_options(self, user_id: str) -> dict[str, Any]:
         """
-        Get available email style options and current selection for user.
+        Get 3-profile creation status for user.
 
         Args:
             user_id: UUID string of the user
 
         Returns:
-            dict: Available options and current selection
+            dict: Status of each style and overall completion
         """
         try:
-            # Get current preferences
             current_preferences = await self.get_user_email_style_preferences(user_id)
 
-            # Get rate limit status for custom option
+            # Check which styles exist
+            styles_created = {
+                "professional": False,
+                "casual": False,
+                "friendly": False,
+            }
+
+            if current_preferences and "styles" in current_preferences:
+                styles = current_preferences["styles"]
+                for style_type in ["professional", "casual", "friendly"]:
+                    styles_created[style_type] = styles.get(style_type) is not None
+
+            all_complete = all(styles_created.values())
+
+            # Get rate limit status
             rate_limit_status = None
             try:
                 from app.services.email_style_rate_limiter import get_email_extraction_status
@@ -370,62 +296,19 @@ class EmailStyleService:
             except Exception as e:
                 logger.warning("Could not get rate limit status", user_id=user_id, error=str(e))
 
-            # Build available options
-            options = {
-                "casual": {
-                    "name": "Casual",
-                    "description": "Friendly, informal communication style",
-                    "example": {
-                        "greeting": "Hey [name]!",
-                        "closing": "Thanks!",
-                        "tone": "Friendly and direct",
-                    },
-                    "available": True,
-                },
-                "professional": {
-                    "name": "Professional",
-                    "description": "Formal, business-appropriate communication style",
-                    "example": {
-                        "greeting": "Dear [name],",
-                        "closing": "Best regards,",
-                        "tone": "Formal and polite",
-                    },
-                    "available": True,
-                },
-                "custom": {
-                    "name": "Custom",
-                    "description": "Personalized style learned from your email examples",
-                    "example": {
-                        "greeting": "Based on your writing style",
-                        "closing": "Matches your preferences",
-                        "tone": "Uniquely yours",
-                    },
-                    "available": rate_limit_status and rate_limit_status.get("can_extract", False),
-                    "rate_limit_info": rate_limit_status,
-                },
-            }
-
             result = {
-                "available_options": options,
-                "current_selection": {
-                    "style_type": (
-                        current_preferences.get("style_type") if current_preferences else None
-                    ),
-                    "created_at": (
-                        current_preferences.get("created_at") if current_preferences else None
-                    ),
-                },
-                "has_selection": current_preferences is not None
-                and current_preferences.get("style_type") is not None,
-                "can_advance": current_preferences is not None
-                and current_preferences.get("style_type") is not None,
+                "styles_created": styles_created,
+                "all_styles_complete": all_complete,
+                "can_advance": all_complete,
+                "rate_limit_info": rate_limit_status,
+                "current_preferences": current_preferences,
             }
 
             logger.info(
                 "Email style options retrieved",
                 user_id=user_id,
-                current_style=result["current_selection"]["style_type"],
-                can_advance=result["can_advance"],
+                all_complete=all_complete,
+                styles_created=styles_created,
             )
 
             return result
@@ -434,67 +317,19 @@ class EmailStyleService:
             logger.error("Error getting email style options", user_id=user_id, error=str(e))
             raise EmailStyleError(f"Failed to get email style options: {e}", user_id=user_id) from e
 
-    async def select_predefined_style(
-        self, user_id: str, style_type: Literal["casual", "professional"]
-    ) -> dict[str, Any]:
-        """
-        Select a predefined email style (casual or professional).
-
-        Args:
-            user_id: UUID string of the user
-            style_type: Either "casual" or "professional"
-
-        Returns:
-            dict: Selection result with style profile
-
-        Raises:
-            EmailStyleError: If selection fails
-        """
-        try:
-            # Get predefined style profile
-            style_profile = self.get_predefined_style_profile(style_type)
-
-            # Store user's selection
-            success = await self.store_user_email_style(user_id, style_type, style_profile)
-
-            if not success:
-                raise EmailStyleError(
-                    f"Failed to store {style_type} style selection", user_id=user_id
-                )
-
-            logger.info("Predefined email style selected", user_id=user_id, style_type=style_type)
-
-            return {
-                "success": True,
-                "style_type": style_type,
-                "style_profile": style_profile,
-                "message": f"{style_type.title()} email style selected successfully!",
-            }
-
-        except Exception as e:
-            logger.error(
-                "Error selecting predefined style",
-                user_id=user_id,
-                style_type=style_type,
-                error=str(e),
-            )
-            raise EmailStyleError(
-                f"Failed to select {style_type} style: {e}", user_id=user_id
-            ) from e
-
     async def create_custom_style_with_rate_limiting(
-        self, user_id: str, email_examples: list[str]
+        self, user_id: str, labeled_emails: dict[str, str]
     ) -> dict[str, Any]:
         """
-        Create custom email style with rate limiting and OpenAI integration.
-        This is the main entry point for custom style creation.
+        Create 3 custom email styles with rate limiting and OpenAI integration.
+        This is the main entry point for 3-profile creation.
 
         Args:
             user_id: UUID string of the user
-            email_examples: List of 3 email examples
+            labeled_emails: {"professional": "...", "casual": "...", "friendly": "..."}
 
         Returns:
-            dict: Custom style creation result
+            dict: Custom style creation result with all 3 profiles
 
         Raises:
             RateLimitExceeded: If user has exceeded daily limit
@@ -502,14 +337,14 @@ class EmailStyleService:
             EmailStyleError: If creation fails
         """
         try:
-            # Step 1: Validate email examples
-            validation_result = await self.validate_email_examples(email_examples)
+            # Step 1: Validate labeled emails
+            validation_result = await self.validate_email_examples(labeled_emails)
 
             # Step 2: Check rate limiting
             try:
                 rate_limit_check = await check_email_extraction_limit(user_id)
                 logger.info(
-                    "Rate limit check passed for custom style creation",
+                    "Rate limit check passed for 3-profile creation",
                     user_id=user_id,
                     remaining=rate_limit_check.get("remaining"),
                     daily_limit=rate_limit_check.get("daily_limit"),
@@ -519,7 +354,7 @@ class EmailStyleService:
                 error_message = get_rate_limit_error_message(e.used, e.limit, e.reset_time)
 
                 logger.warning(
-                    "Custom style creation blocked by rate limit",
+                    "3-profile creation blocked by rate limit",
                     user_id=user_id,
                     used=e.used,
                     limit=e.limit,
@@ -536,33 +371,32 @@ class EmailStyleService:
                     },
                 }
 
-            # Step 3: Extract custom style (this will be implemented when we add OpenAI)
-            # Step 3: Extract custom style using OpenAI
+            # Step 3: Extract 3 styles using OpenAI
             try:
                 from app.services.openai_service import extract_custom_email_style
 
-                openai_result = await extract_custom_email_style(email_examples)
+                openai_result = await extract_custom_email_style(labeled_emails)
 
                 extraction_success = True
-                extraction_result = openai_result["style_profile"]
-                extraction_grade = openai_result["extraction_grade"]
+                extraction_result = openai_result["style_profiles"]  # All 3 profiles
+                extraction_grades = openai_result["extraction_grades"]  # Grades per profile
                 extraction_error = None
 
                 logger.info(
-                    "OpenAI extraction completed successfully",
+                    "OpenAI 3-profile extraction completed successfully",
                     user_id=user_id,
-                    extraction_grade=extraction_grade,
-                    style_profile_keys=list(extraction_result.keys()) if extraction_result else [],
+                    grades=extraction_grades,
+                    profiles=list(extraction_result.keys()),
                 )
 
             except Exception as openai_error:
                 extraction_success = False
                 extraction_result = {}
-                extraction_grade = "C"
+                extraction_grades = {"professional": "C", "casual": "C", "friendly": "C"}
                 extraction_error = f"OpenAI extraction failed: {str(openai_error)}"
 
                 logger.error(
-                    "OpenAI extraction failed",
+                    "OpenAI 3-profile extraction failed",
                     user_id=user_id,
                     error=str(openai_error),
                     error_type=type(openai_error).__name__,
@@ -574,7 +408,7 @@ class EmailStyleService:
                     user_id,
                     success=extraction_success,
                     metadata={
-                        "email_count": len(email_examples),
+                        "email_labels": list(labeled_emails.keys()),
                         "validation_warnings": len(validation_result.get("warnings", [])),
                         "extraction_error": extraction_error if not extraction_success else None,
                     },
@@ -587,19 +421,17 @@ class EmailStyleService:
 
             # Step 5: Handle extraction result
             if extraction_success:
-                # Store the custom style
+                # Store all 3 profiles
                 storage_success = await self.store_user_email_style(
-                    user_id, "custom", extraction_result
+                    user_id, extraction_result, extraction_grades
                 )
 
                 if storage_success:
-                    # TO THIS:
                     return {
                         "success": True,
-                        "style_type": "custom",
-                        "style_profile": extraction_result,
-                        "extraction_grade": extraction_grade,  # ✅ Use actual grade from OpenAI
-                        "message": f"Custom email style created successfully! Quality grade: {extraction_grade}",
+                        "style_profiles": extraction_result,  # All 3 profiles
+                        "extraction_grades": extraction_grades,  # Grades per profile
+                        "message": f"3 email styles created successfully! Grades: {extraction_grades}",
                     }
                 else:
                     return {
@@ -620,12 +452,14 @@ class EmailStyleService:
             raise  # Re-raise validation exceptions
         except Exception as e:
             logger.error(
-                "Unexpected error creating custom style",
+                "Unexpected error creating 3-profile custom style",
                 user_id=user_id,
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise EmailStyleError(f"Custom style creation failed: {e}", user_id=user_id) from e
+            raise EmailStyleError(
+                f"3-profile style creation failed: {e}", user_id=user_id
+            ) from e
 
     def _get_current_timestamp(self) -> str:
         """Get current UTC timestamp as ISO string."""
@@ -641,25 +475,11 @@ class EmailStyleService:
             dict: Health status
         """
         try:
-            # Test predefined styles
-            casual_profile = self.get_predefined_style_profile("casual")
-            professional_profile = self.get_predefined_style_profile("professional")
-
-            predefined_styles_ok = (
-                isinstance(casual_profile, dict)
-                and isinstance(professional_profile, dict)
-                and "greeting" in casual_profile
-                and "greeting" in professional_profile
-            )
-
             return {
-                "healthy": predefined_styles_ok,
+                "healthy": True,
                 "service": "email_style_service",
-                "predefined_styles": predefined_styles_ok,
-                "casual_style_keys": list(casual_profile.keys()) if predefined_styles_ok else [],
-                "professional_style_keys": (
-                    list(professional_profile.keys()) if predefined_styles_ok else []
-                ),
+                "mode": "3-profile",
+                "supported_styles": ["professional", "casual", "friendly"],
                 "timestamp": self._get_current_timestamp(),
             }
 
@@ -673,45 +493,37 @@ email_style_service = EmailStyleService()
 
 
 # Convenience functions for easy import
-def get_predefined_email_style(style_type: Literal["casual", "professional"]) -> dict[str, Any]:
-    """Get predefined email style profile."""
-    return email_style_service.get_predefined_style_profile(style_type)
-
-
-async def validate_custom_email_examples(email_examples: list[str]) -> dict[str, Any]:
-    """Validate email examples for custom style extraction."""
-    return await email_style_service.validate_email_examples(email_examples)
+async def validate_custom_email_examples(labeled_emails: dict[str, str]) -> dict[str, Any]:
+    """Validate labeled email examples for 3-profile extraction."""
+    return await email_style_service.validate_email_examples(labeled_emails)
 
 
 async def store_email_style_selection(
-    user_id: str,
-    style_type: Literal["casual", "professional", "custom"],
-    style_profile: dict[str, Any],
+    user_id: str, style_profiles: dict[str, Any], extraction_grades: dict[str, str] | None = None
 ) -> bool:
-    """Store user's email style selection."""
-    return await email_style_service.store_user_email_style(user_id, style_type, style_profile)
+    """Store user's 3 email style profiles."""
+    return await email_style_service.store_user_email_style(
+        user_id, style_profiles, extraction_grades
+    )
 
 
 async def get_user_email_style(user_id: str) -> dict[str, Any] | None:
-    """Get user's current email style preferences."""
+    """Get user's current email style preferences (all 3 profiles)."""
     return await email_style_service.get_user_email_style_preferences(user_id)
 
 
 async def get_email_style_selection_options(user_id: str) -> dict[str, Any]:
-    """Get available email style options for user."""
+    """Get 3-profile creation status for user."""
     return await email_style_service.get_email_style_options(user_id)
 
 
-async def select_predefined_email_style(
-    user_id: str, style_type: Literal["casual", "professional"]
+async def create_custom_email_style(
+    user_id: str, labeled_emails: dict[str, str]
 ) -> dict[str, Any]:
-    """Select casual or professional email style."""
-    return await email_style_service.select_predefined_style(user_id, style_type)
-
-
-async def create_custom_email_style(user_id: str, email_examples: list[str]) -> dict[str, Any]:
-    """Create custom email style with rate limiting."""
-    return await email_style_service.create_custom_style_with_rate_limiting(user_id, email_examples)
+    """Create 3 custom email styles with rate limiting."""
+    return await email_style_service.create_custom_style_with_rate_limiting(
+        user_id, labeled_emails
+    )
 
 
 async def email_style_service_health() -> dict[str, Any]:

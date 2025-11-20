@@ -31,6 +31,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
         u.calendar_connected,
         u.created_at, u.updated_at,
         us.voice_preferences,
+        COALESCE(us.email_style_skipped, false) as email_style_skipped,
         p.name as plan_name, p.daily_email_extractions,
         -- Gmail token information for health assessment
         ot.expires_at as token_expires_at,
@@ -67,8 +68,9 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
             calendar_connected,
             created_at,
             updated_at,
-            voice_preferences,
-            plan_name,
+        voice_preferences,
+        email_style_skipped,
+        plan_name,
             daily_email_extractions,
             token_expires_at,
             refresh_failure_count,
@@ -97,6 +99,7 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
             plan=plan,
             created_at=created_at,
             updated_at=updated_at,
+            email_style_skipped=email_style_skipped,
         )
 
         # Add Gmail connection health information

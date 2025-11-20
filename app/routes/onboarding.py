@@ -13,7 +13,10 @@ Architecture:
 Usage:
     1. GET /onboarding/status - Check current onboarding state
     2. PUT /onboarding/profile - Update display name (timezone auto-detected)
-    3. POST /onboarding/complete - Mark onboarding as finished
+    3. GET /onboarding/email-style - Get 3-profile status
+    4. POST /onboarding/email-style/custom - Create 3 custom styles
+    5. POST /onboarding/email-style/skip - Skip style creation (Gmail still required)
+    6. POST /onboarding/complete - Mark onboarding as finished
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -21,21 +24,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.auth.verify import auth_dependency
 from app.infrastructure.observability.logging import get_logger
 from app.models.api.user_request import (
-    CustomEmailStyleRequest,  # NEW
-    EmailStyleSelectionRequest,  # NEW
+    CustomEmailStyleRequest,
     OnboardingProfileUpdateRequest,
 )
 from app.models.api.user_response import (
     CustomEmailStyleResponse,
-    EmailStyleSelectionResponse,  # NEW
-    EmailStyleStatusResponse,  # NEW
+    EmailStyleSkipResponse,
+    EmailStyleStatusResponse,
     OnboardingCompleteResponse,
     OnboardingProfileUpdateResponse,
     OnboardingStatusResponse,
 )
 from app.services.onboarding_service import (
+    OnboardingServiceError,
     complete_onboarding,
     get_onboarding_status,
+    skip_email_style_step,
     update_profile_name,
 )
 
@@ -74,6 +78,7 @@ async def get_status(claims: dict = Depends(auth_dependency)):
         onboarding_completed=profile.onboarding_completed,
         gmail_connected=profile.gmail_connected,
         timezone=profile.timezone,
+        email_style_skipped=profile.email_style_skipped,
     )
 
     logger.info(
@@ -89,9 +94,20 @@ async def get_status(claims: dict = Depends(auth_dependency)):
 @router.put("/profile", response_model=OnboardingProfileUpdateResponse)
 async def update_profile(
     request: OnboardingProfileUpdateRequest,
-    request_obj: Request,  # ← Add this to access headers
+    request_obj: Request,
     claims: dict = Depends(auth_dependency),
 ):
+    """
+    Update user profile during onboarding.
+    
+    Args:
+        request: Profile update data (display_name)
+        request_obj: FastAPI request object for headers
+        claims: JWT claims from auth
+    
+    Returns:
+        OnboardingProfileUpdateResponse: Success status and next step
+    """
     user_id = claims.get("sub")
     if not user_id:
         raise HTTPException(401, "Invalid token: missing user ID")
@@ -103,7 +119,7 @@ async def update_profile(
     profile = await update_profile_name(
         user_id=user_id,
         display_name=request.display_name,
-        timezone=timezone,  # ← iOS auto-detected or UTC fallback
+        timezone=timezone,
     )
 
     if not profile:
@@ -116,81 +132,17 @@ async def update_profile(
     )
 
 
-# UPDATE existing complete endpoint to require email_style step
-@router.post("/complete", response_model=OnboardingCompleteResponse)
-async def complete(claims: dict = Depends(auth_dependency)):
-    """
-    Mark onboarding as completed.
-
-    Prerequisites:
-        - User must be on 'email_style' onboarding step  # UPDATED
-        - User must have gmail_connected = true
-        - User must have selected an email style          # NEW REQUIREMENT
-
-    Returns:
-        OnboardingCompleteResponse: Success status and updated user profile
-    """
-    user_id = claims.get("sub")
-    if not user_id:
-        logger.error("No user ID in JWT claims", claims=claims)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
-        )
-
-    # Service layer call (now includes email style validation)
-    profile = await complete_onboarding(user_id)
-
-    if not profile:
-        logger.warning("Onboarding completion failed - prerequisites not met", user_id=user_id)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot complete onboarding. Please ensure you have connected Gmail and selected an email style.",
-        )
-
-    response = OnboardingCompleteResponse(
-        success=True,
-        message="Congratulations! Onboarding completed successfully. You can now use all voice features.",
-        user_profile=profile,
-    )
-
-    logger.info(
-        "Onboarding completed successfully",
-        user_id=user_id,
-        user_email=profile.email,
-        step_transition="email_style → completed",  # UPDATED
-    )
-
-    return response
-
-
-# Health check endpoint for onboarding system
-@router.get("/health")
-async def onboarding_health():
-    """
-    Simple health check for onboarding endpoints.
-    Public endpoint - no auth required.
-    """
-    return {
-        "status": "ok",
-        "service": "onboarding",
-        "endpoints": [
-            "GET /onboarding/status",
-            "PUT /onboarding/profile",
-            "POST /onboarding/complete",
-        ],
-    }
-
-
-# NEW ENDPOINTS FOR EMAIL STYLE STEP
-
-
 @router.get("/email-style", response_model=EmailStyleStatusResponse)
 async def get_email_style_status(claims: dict = Depends(auth_dependency)):
     """
-    Get current email style step status and available options.
+    Get current 3-profile email style status.
 
     Returns:
-        EmailStyleStatusResponse: Current selection status and options
+        EmailStyleStatusResponse: Status of all 3 profiles (professional, casual, friendly)
+    
+    Raises:
+        401: Invalid authentication token
+        400: User not on email_style step
     """
     user_id = claims.get("sub")
     if not user_id:
@@ -211,8 +163,8 @@ async def get_email_style_status(claims: dict = Depends(auth_dependency)):
 
     response = EmailStyleStatusResponse(
         current_step=step_status["current_step"],
-        style_selected=step_status["style_selected"],
-        available_options=list(step_status["available_options"].values()),
+        styles_created=step_status["styles_created"],
+        all_styles_complete=step_status["all_styles_complete"],
         can_advance=step_status["can_advance"],
         rate_limit_info=step_status.get("rate_limit_info"),
     )
@@ -220,82 +172,11 @@ async def get_email_style_status(claims: dict = Depends(auth_dependency)):
     logger.info(
         "Email style status retrieved",
         user_id=user_id,
-        style_selected=step_status["style_selected"],
-        can_advance=step_status["can_advance"],
+        styles_created=step_status["styles_created"],
+        all_complete=step_status["all_styles_complete"],
     )
 
     return response
-
-
-@router.put("/email-style", response_model=EmailStyleSelectionResponse)
-async def select_email_style(
-    request: EmailStyleSelectionRequest, claims: dict = Depends(auth_dependency)
-):
-    """
-    Select casual or professional email style.
-    No rate limiting needed for predefined styles.
-
-    Returns:
-        EmailStyleSelectionResponse: Selection result
-    """
-    user_id = claims.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
-        )
-
-    try:
-        # Select predefined email style
-        from app.services.email_style_service import select_predefined_email_style
-
-        result = await select_predefined_email_style(user_id, request.style_type)
-
-        if not result["success"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to select email style"),
-            )
-
-        # Complete email style selection in onboarding
-        from app.services.onboarding_service import complete_email_style_selection
-
-        await complete_email_style_selection(user_id, result["style_type"], result["style_profile"])
-
-        # NEW: Actually complete onboarding now that email style is selected
-        try:
-            completed_profile = await complete_onboarding(user_id)
-            if completed_profile:
-                next_step = "completed"
-            else:
-                next_step = "email_style"  # Fallback
-        except Exception as e:
-            next_step = "email_style"  # Fallback
-            logger.error(
-                "Failed to complete onboarding after email style selection",
-                user_id=user_id,
-                error=str(e),
-            )
-
-        # Return response with actual next_step
-        return EmailStyleSelectionResponse(
-            success=True,
-            style_type=result["style_type"],
-            next_step=next_step,  # Use actual completion result
-            message=result["message"],
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            "Error selecting email style",
-            user_id=user_id,
-            style_type=request.style_type,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to select email style"
-        )
 
 
 @router.post("/email-style/custom", response_model=CustomEmailStyleResponse)
@@ -303,11 +184,19 @@ async def create_custom_email_style(
     request: CustomEmailStyleRequest, claims: dict = Depends(auth_dependency)
 ):
     """
-    Create custom email style from 3 email examples.
+    Create 3 custom email styles from labeled examples.
     Includes rate limiting and OpenAI integration.
 
+    Args:
+        request: Labeled emails (professional_email, casual_email, friendly_email)
+        claims: JWT claims from auth
+
     Returns:
-        CustomEmailStyleResponse: Custom style creation result
+        CustomEmailStyleResponse: 3 style profiles with grades
+    
+    Raises:
+        401: Invalid authentication token
+        500: Style creation failed
     """
     user_id = claims.get("sub")
     if not user_id:
@@ -316,24 +205,31 @@ async def create_custom_email_style(
         )
 
     try:
-        # Create custom email style (includes rate limiting + OpenAI)
+        # Prepare labeled emails dict from request
+        labeled_emails = {
+            "professional": request.professional_email,
+            "casual": request.casual_email,
+            "friendly": request.friendly_email,
+        }
+
+        # Create 3 custom styles (includes rate limiting + OpenAI)
         from app.services.email_style_service import create_custom_email_style
 
-        result = await create_custom_email_style(user_id, request.email_examples)
+        result = await create_custom_email_style(user_id, labeled_emails)
 
         # Handle rate limiting
         if not result["success"] and result.get("error") == "rate_limit_exceeded":
             response = CustomEmailStyleResponse(
                 success=False,
-                style_profile=None,
-                extraction_grade=None,
+                style_profiles=None,
+                extraction_grades=None,
                 error_message=result["message"],
                 rate_limit_info=result.get("rate_limit_info"),
                 next_step=None,
             )
 
             logger.warning(
-                "Custom email style blocked by rate limit",
+                "3-profile creation blocked by rate limit",
                 user_id=user_id,
                 rate_limit_info=result.get("rate_limit_info"),
             )
@@ -344,15 +240,15 @@ async def create_custom_email_style(
         if not result["success"]:
             response = CustomEmailStyleResponse(
                 success=False,
-                style_profile=None,
-                extraction_grade=None,
-                error_message=result.get("message", "Custom style creation failed"),
+                style_profiles=None,
+                extraction_grades=None,
+                error_message=result.get("message", "3-profile style creation failed"),
                 rate_limit_info=None,
                 next_step=None,
             )
 
             logger.warning(
-                "Custom email style creation failed", user_id=user_id, error=result.get("error")
+                "3-profile style creation failed", user_id=user_id, error=result.get("error")
             )
 
             return response
@@ -360,45 +256,63 @@ async def create_custom_email_style(
         # Success - complete email style selection in onboarding
         from app.services.onboarding_service import complete_email_style_selection
 
-        await complete_email_style_selection(user_id, result["style_type"], result["style_profile"])
+        selection_profile = await complete_email_style_selection(
+            user_id, "custom", result["style_profiles"]
+        )
 
-        # NEW: Actually complete onboarding now that email style is selected
-        try:
-            completed_profile = await complete_onboarding(user_id)
-            if completed_profile:
-                next_step = "completed"
-                logger.info(
-                    "Onboarding completed after custom email style creation",
-                    user_id=user_id,
-                    extraction_grade=result.get("extraction_grade"),
-                )
-            else:
-                next_step = "email_style"  # Fallback if completion failed
-                logger.warning(
-                    "Email style created but onboarding completion failed",
-                    user_id=user_id,
-                )
-        except Exception as e:
-            next_step = "email_style"  # Fallback if completion failed
-            logger.error(
-                "Failed to complete onboarding after email style creation",
+        completed_profile = None
+        next_step = "email_style"
+
+        if selection_profile and selection_profile.onboarding_completed:
+            completed_profile = selection_profile
+            next_step = "completed"
+            logger.info(
+                "3-profile selection stored for user already marked completed",
                 user_id=user_id,
-                error=str(e),
             )
+        else:
+            # Complete onboarding now that all 3 styles are created
+            try:
+                completed_profile = await complete_onboarding(user_id)
+                if completed_profile:
+                    next_step = "completed"
+                    logger.info(
+                        "Onboarding completed after 3-profile creation",
+                        user_id=user_id,
+                        extraction_grades=result.get("extraction_grades"),
+                    )
+                else:
+                    logger.warning(
+                        "3 profiles created but onboarding completion failed",
+                        user_id=user_id,
+                    )
+            except OnboardingServiceError as e:
+                logger.warning(
+                    "Failed onboarding completion after 3-profile creation",
+                    user_id=user_id,
+                    error=str(e),
+                    recoverable=e.recoverable,
+                )
+            except Exception as e:
+                logger.error(
+                    "Unexpected error completing onboarding after 3-profile creation",
+                    user_id=user_id,
+                    error=str(e),
+                )
 
         response = CustomEmailStyleResponse(
             success=True,
-            style_profile=result["style_profile"],
-            extraction_grade=result.get("extraction_grade"),
+            style_profiles=result["style_profiles"],  # All 3 profiles
+            extraction_grades=result.get("extraction_grades"),  # Grades per profile
             error_message=None,
             rate_limit_info=None,
-            next_step=next_step,  # Use the actual completion result
+            next_step=next_step,
         )
 
         logger.info(
-            "Custom email style created successfully",
+            "3 custom email styles created successfully",
             user_id=user_id,
-            extraction_grade=result.get("extraction_grade"),
+            extraction_grades=result.get("extraction_grades"),
             next_step=next_step,
         )
 
@@ -408,61 +322,151 @@ async def create_custom_email_style(
         raise
     except Exception as e:
         logger.error(
-            "Error creating custom email style",
+            "Error creating 3 custom email styles",
             user_id=user_id,
-            email_count=len(request.email_examples),
             error=str(e),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create custom email style",
+            detail="Failed to create 3 custom email styles",
         )
 
 
-# Add this endpoint to app/routes/onboarding.py
-# Place it after the existing /onboarding/health endpoint
+@router.post("/email-style/skip", response_model=EmailStyleSkipResponse)
+async def skip_email_style(claims: dict = Depends(auth_dependency)):
+    """
+    Skip email style creation while still allowing onboarding completion.
+    """
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
+        )
+
+    try:
+        profile = await skip_email_style_step(user_id)
+    except OnboardingServiceError as e:
+        logger.warning(
+            "Failed to skip email style step",
+            user_id=user_id,
+            error=str(e),
+            recoverable=e.recoverable,
+        )
+        status_code = (
+            status.HTTP_400_BAD_REQUEST if getattr(e, "recoverable", True) else status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        raise HTTPException(status_code=status_code, detail=str(e))
+    except Exception as e:
+        logger.error("Unexpected error skipping email style step", user_id=user_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to skip email style step",
+        ) from e
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to skip email style step",
+        )
+
+    response = EmailStyleSkipResponse(
+        success=True,
+        message="Email style selection skipped. You can create custom styles later in settings.",
+        user_profile=profile,
+    )
+
+    logger.info(
+        "Email style step skipped by user",
+        user_id=user_id,
+        onboarding_step=profile.onboarding_step,
+        onboarding_completed=profile.onboarding_completed,
+    )
+
+    return response
+
+
+@router.post("/complete", response_model=OnboardingCompleteResponse)
+async def complete(claims: dict = Depends(auth_dependency)):
+    """
+    Mark onboarding as completed.
+
+    Prerequisites:
+        - User must be on 'email_style' onboarding step
+        - User must have gmail_connected = true
+        - User must have all 3 email styles created
+
+    Returns:
+        OnboardingCompleteResponse: Success status and updated user profile
+    """
+    user_id = claims.get("sub")
+    if not user_id:
+        logger.error("No user ID in JWT claims", claims=claims)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
+        )
+
+    # Service layer call (includes email style validation)
+    profile = await complete_onboarding(user_id)
+
+    if not profile:
+        logger.warning("Onboarding completion failed - prerequisites not met", user_id=user_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot complete onboarding. Please ensure you have connected Gmail and created all 3 email styles.",
+        )
+
+    response = OnboardingCompleteResponse(
+        success=True,
+        message="Congratulations! Onboarding completed successfully. You can now use all voice features.",
+        user_profile=profile,
+    )
+
+    logger.info(
+        "Onboarding completed successfully",
+        user_id=user_id,
+        user_email=profile.email,
+        step_transition="email_style → completed",
+    )
+
+    return response
+
+
+# Health check endpoint for onboarding system
+@router.get("/health")
+async def onboarding_health():
+    """
+    Simple health check for onboarding endpoints.
+    Public endpoint - no auth required.
+    """
+    return {
+        "status": "ok",
+        "service": "onboarding",
+        "endpoints": [
+            "GET /onboarding/status",
+            "PUT /onboarding/profile",
+            "GET /onboarding/email-style",
+            "POST /onboarding/email-style/custom",
+            "POST /onboarding/email-style/skip",
+            "POST /onboarding/complete",
+        ],
+        "email_style_mode": "3-profile",
+    }
 
 
 @router.get("/email-style/health")
 async def email_style_health():
     """
-    Health check for email style services including OpenAI connectivity.
+    Lightweight health ping for email style services.
     Public endpoint - no auth required.
     """
-    try:
-        from app.services.email_style_rate_limiter import email_style_rate_limiter_health
-        from app.services.email_style_service import email_style_service_health
-        from app.services.openai_service import openai_service_health
-
-        # Run all health checks
-        openai_health = await openai_service_health()
-        style_service_health = await email_style_service_health()
-        rate_limiter_health = await email_style_rate_limiter_health()
-
-        # Determine overall status
-        all_healthy = all(
-            [
-                openai_health.get("healthy", False),
-                style_service_health.get("healthy", False),
-                rate_limiter_health.get("healthy", False),
-            ]
-        )
-
-        return {
-            "status": "ok" if all_healthy else "degraded",
-            "service": "email_style_system",
-            "components": {
-                "openai": openai_health,
-                "style_service": style_service_health,
-                "rate_limiter": rate_limiter_health,
-            },
-            "endpoints": [
-                "GET /onboarding/email-style",
-                "PUT /onboarding/email-style",
-                "POST /onboarding/email-style/custom",
-            ],
-        }
-
-    except Exception as e:
-        logger.error("Email style health check failed", error=str(e))
-        return {"status": "error", "service": "email_style_system", "error": str(e)}
+    return {
+        "status": "ok",
+        "service": "email_style_system",
+        "mode": "3-profile",
+        "components": {
+            "openai": "not checked",
+            "style_service": "not checked",
+            "rate_limiter": "not checked",
+        },
+        "message": "For detailed diagnostics, use authenticated monitoring endpoints.",
+    }

@@ -1,6 +1,5 @@
 # app/models/api/user_request.py
-from typing import Literal
-
+# app/models/api/user_request.py
 from pydantic import BaseModel, Field
 
 
@@ -10,16 +9,22 @@ class OnboardingProfileUpdateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
 
 
-# NEW: Email Style Selection Models
-class EmailStyleSelectionRequest(BaseModel):
-    """Request for selecting casual/professional email style."""
-
-    style_type: Literal["casual", "professional"]
-
-
+# 3-Profile Email Style Request (replaces old list-based request)
 class CustomEmailStyleRequest(BaseModel):
-    """Request for creating custom email style from examples."""
-
-    email_examples: list[str] = Field(
-        ..., min_items=3, max_items=3, description="Three full email examples (subject + body)"
+    """Request for creating 3 email styles from labeled examples."""
+    
+    professional_email: str = Field(
+        ..., 
+        min_length=50,
+        description="Professional email example (subject + body)"
+    )
+    casual_email: str = Field(
+        ..., 
+        min_length=50,
+        description="Casual email example (subject + body)"
+    )
+    friendly_email: str = Field(
+        ..., 
+        min_length=50,
+        description="Friendly email example (subject + body)"
     )

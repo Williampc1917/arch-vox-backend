@@ -360,22 +360,64 @@ async def increment_extraction_counter(user_id: str) -> bool:
 
 async def store_email_style_preferences(user_id: str, preferences: dict[str, Any]) -> bool:
     """
-    Store user's email style preferences in user_settings table.
+    Store user's 3 email style profiles in user_settings table.
+    
+    Expected preferences structure:
+    {
+        "styles": {
+            "professional": {...profile...},
+            "casual": {...profile...},
+            "friendly": {...profile...}
+        },
+        "created_at": "ISO timestamp",
+        "version": "2.0",
+        "extraction_metadata": {
+            "grades": {"professional": "A", "casual": "B", "friendly": "A"},
+            "extraction_timestamp": "ISO timestamp"
+        }
+    }
 
     Args:
         user_id: UUID string of the user
-        preferences: Email style preferences dict
+        preferences: 3-profile email style preferences dict
 
     Returns:
         bool: True if storage successful, False otherwise
     """
     try:
         import json
+        from datetime import UTC, datetime
+
+        # Ensure proper structure
+        if "styles" not in preferences:
+            logger.error(
+                "Invalid preferences structure - missing 'styles' key",
+                user_id=user_id,
+                preferences_keys=list(preferences.keys()),
+            )
+            return False
+
+        # Validate all 3 styles exist
+        required_styles = ["professional", "casual", "friendly"]
+        styles = preferences.get("styles", {})
+        for style_type in required_styles:
+            if style_type not in styles:
+                logger.error(
+                    f"Missing {style_type} style in preferences", user_id=user_id
+                )
+                return False
+
+        # Add metadata if missing
+        if "created_at" not in preferences:
+            preferences["created_at"] = datetime.now(UTC).isoformat()
+        if "version" not in preferences:
+            preferences["version"] = "2.0"
 
         query = """
         UPDATE user_settings
         SET
             email_style_preferences = %s,
+            email_style_skipped = false,
             updated_at = NOW()
         WHERE user_id = %s
         """
@@ -384,16 +426,59 @@ async def store_email_style_preferences(user_id: str, preferences: dict[str, Any
         preferences_json = json.dumps(preferences)
 
         affected_rows = await execute_query(query, (preferences_json, user_id))
+
+        if affected_rows > 0:
+            logger.info(
+                "3-profile email styles stored successfully",
+                user_id=user_id,
+                styles=list(styles.keys()),
+                version=preferences.get("version"),
+            )
+        else:
+            logger.warning(
+                "No rows updated when storing email styles - user may not exist",
+                user_id=user_id,
+            )
+
+        return affected_rows > 0
+
+    except Exception as e:
+        logger.error(
+            "Error storing 3-profile email style preferences", user_id=user_id, error=str(e)
+        )
+        return False
+
+
+async def set_email_style_skipped(user_id: str, skipped: bool) -> bool:
+    """Update persistent flag that tracks if user skipped the email style step."""
+    try:
+        query = """
+        UPDATE user_settings
+        SET
+            email_style_skipped = %s,
+            updated_at = NOW()
+        WHERE user_id = %s
+        """
+
+        affected_rows = await execute_query(query, (skipped, user_id))
+
+        if affected_rows == 0:
+            logger.warning(
+                "No user_settings row updated when updating email_style_skipped flag",
+                user_id=user_id,
+                skipped=skipped,
+            )
+
         return affected_rows > 0
 
     except DatabaseError as e:
         logger.error(
-            "Database error storing email style preferences", user_id=user_id, error=str(e)
+            "Database error updating email_style_skipped flag", user_id=user_id, error=str(e)
         )
         return False
     except Exception as e:
         logger.error(
-            "Unexpected error storing email style preferences", user_id=user_id, error=str(e)
+            "Unexpected error updating email_style_skipped flag", user_id=user_id, error=str(e)
         )
         return False
 
