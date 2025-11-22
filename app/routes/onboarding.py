@@ -125,9 +125,11 @@ async def update_profile(
     if not profile:
         raise HTTPException(400, "Profile update failed...")
 
+    next_step = profile.onboarding_step or "gmail"
+
     return OnboardingProfileUpdateResponse(
         success=True,
-        next_step="gmail",
+        next_step=next_step,
         message=f"Profile updated! Welcome, {profile.display_name}.",
     )
 
@@ -369,10 +371,15 @@ async def skip_email_style(claims: dict = Depends(auth_dependency)):
             detail="Failed to skip email style step",
         )
 
+    # Preserve current onboarding step, but signal next step for clients
+    next_step = "completed" if profile.onboarding_completed else "email_style"
+
     response = EmailStyleSkipResponse(
         success=True,
         message="Email style selection skipped. You can create custom styles later in settings.",
         user_profile=profile,
+        next_step=next_step,
+        onboarding_completed=profile.onboarding_completed,
     )
 
     logger.info(

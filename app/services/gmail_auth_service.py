@@ -203,8 +203,8 @@ class GmailConnectionService:
                     error_code="invalid_state",
                 )
 
-            # Exchange authorization code for tokens (sync call is fine here)
-            token_response = exchange_oauth_code(authorization_code)
+            # Exchange authorization code for tokens using async HTTP client
+            token_response = await exchange_oauth_code(authorization_code)
 
             # ✅ FIX: Store tokens and update user status in single transaction
             await self._complete_oauth_database_updates(user_id, token_response)

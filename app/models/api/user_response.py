@@ -61,6 +61,12 @@ class EmailStyleSkipResponse(BaseModel):
     success: bool
     message: str
     user_profile: UserProfile
+    next_step: str | None = Field(
+        None, description="Next onboarding step (completed if skip finishes onboarding)"
+    )
+    onboarding_completed: bool | None = Field(
+        None, description="Whether onboarding is now completed"
+    )
 
 
 # UPDATED: Email Style Status Response (shows 3-profile status)
@@ -111,4 +117,3 @@ class CustomEmailStyleResponse(BaseModel):
         None,
         description="Next onboarding step (usually 'completed')"
     )
-

@@ -5,6 +5,7 @@ REFACTORED: Now uses database connection pool instead of direct psycopg connecti
 """
 
 import asyncio
+import inspect
 from datetime import UTC, datetime, timedelta
 
 from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
@@ -27,21 +28,24 @@ logger = get_logger(__name__)
 
 async def retry_with_backoff(func, *args, retries=3, base_delay=1, **kwargs):
     """
-    Retry a blocking function with exponential backoff.
-    Uses asyncio.to_thread to avoid blocking the event loop.
+    Retry a callable with exponential backoff.
+    Supports both sync (runs in thread) and async functions.
     """
     import random
 
     for attempt in range(retries):
         try:
+            if inspect.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
             return await asyncio.to_thread(func, *args, **kwargs)
         except Exception as e:
             if attempt == retries - 1:
                 raise  # Give up after last attempt
             delay = base_delay * (2**attempt) + random.uniform(0, 0.3)
+            func_name = getattr(func, "__name__", func.__class__.__name__)
             logger.warning(
                 "Retrying after failure",
-                func=func.__name__,
+                func=func_name,
                 attempt=attempt + 1,
                 delay=delay,
                 error=str(e),
@@ -528,7 +532,7 @@ class TokenService:
             revoke_success = True
             if tokens.access_token:
 
-                revoke_success = await asyncio.to_thread(revoke_google_token, tokens.access_token)
+                revoke_success = await revoke_google_token(tokens.access_token)
 
                 if not revoke_success:
                     logger.warning(

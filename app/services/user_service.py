@@ -101,6 +101,8 @@ async def get_user_profile(user_id: str) -> UserProfile | None:
             updated_at=updated_at,
             email_style_skipped=email_style_skipped,
         )
+        # Maintain backward compatibility for clients expecting 'step'
+        profile.step = profile.onboarding_step
 
         # Add Gmail connection health information
         profile = await _enhance_profile_with_gmail_health(

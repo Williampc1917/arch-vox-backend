@@ -37,7 +37,7 @@ class FastRedisClient:
                 socket_timeout=10,
                 health_check_interval=30,
                 # Upstash-specific settings
-                ssl_check_hostname=False,  # Upstash uses TLS
+                ssl_check_hostname=True,  # Upstash uses TLS
                 decode_responses=True,  # Auto-decode strings
             )
 
@@ -52,8 +52,8 @@ class FastRedisClient:
 
         except Exception as e:
             logger.error("Failed to initialize fast Redis client", error=str(e))
-            # Don't raise - allow app to start with fallback
             self._initialized = False
+            raise RuntimeError("Redis initialization failed") from e
 
     def _build_upstash_redis_url(self) -> str:
         """Build proper Redis URL for Upstash native protocol"""
@@ -152,6 +152,30 @@ class FastRedisClient:
         except Exception as e:
             logger.error("Redis EXISTS failed", key=key[:30], error=str(e))
             return False
+
+    async def incr_with_ttl(self, key: str, ttl_s: int | None = None) -> int | None:
+        """Increment a key and optionally refresh TTL atomically."""
+        try:
+            await self._ensure_initialized()
+            async with self.client.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                if ttl_s:
+                    pipe.expire(key, ttl_s)
+                results = await pipe.execute()
+            return int(results[0]) if results else None
+        except Exception as e:
+            logger.error("Redis INCR failed", key=key[:30], error=str(e))
+            return None
+
+    async def decr(self, key: str, amount: int = 1) -> int | None:
+        """Decrement a key and return the new value."""
+        try:
+            await self._ensure_initialized()
+            new_value = await self.client.decr(key, amount)
+            return int(new_value)
+        except Exception as e:
+            logger.error("Redis DECR failed", key=key[:30], error=str(e))
+            return None
 
 
 # Global instance

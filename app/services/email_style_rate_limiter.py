@@ -7,11 +7,19 @@ Handles rate limiting for custom email style extractions using plan-based limits
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.config import settings
 from app.db.helpers import (
     get_user_extraction_limit_status,
+    get_user_plan_limits,
     increment_extraction_counter,
 )
 from app.infrastructure.observability.logging import get_logger
+from app.services.email_style_usage_cache import (
+    decrement_usage_count,
+    get_usage_count,
+    increment_usage_count,
+    set_usage_count,
+)
 
 logger = get_logger(__name__)
 
@@ -46,6 +54,16 @@ class EmailStyleRateLimiter:
     def __init__(self):
         logger.info("Email style rate limiter initialized")
 
+    async def _get_plan_limits(self, user_id: str) -> dict[str, Any]:
+        plan_info = await get_user_plan_limits(user_id)
+        if not plan_info:
+            raise EmailStyleRateLimiterError("User plan not found", user_id=user_id)
+
+        return {
+            "plan_name": plan_info["plan_name"],
+            "daily_limit": plan_info.get("daily_email_extractions", 0) or 0,
+        }
+
     async def check_extraction_limit(self, user_id: str) -> dict[str, Any]:
         """
         Check if user can perform custom email extraction.
@@ -61,7 +79,55 @@ class EmailStyleRateLimiter:
             EmailStyleRateLimiterError: If unable to check limits
         """
         try:
-            # Get complete rate limit status from database
+            cache_enabled = settings.EMAIL_STYLE_REDIS_CACHE_ENABLED
+            cached_usage = await get_usage_count(user_id) if cache_enabled else None
+
+            if cached_usage is not None:
+                plan_limits = await self._get_plan_limits(user_id)
+                daily_limit = plan_limits["daily_limit"]
+
+                if daily_limit <= 0:
+                    raise EmailStyleRateLimiterError(
+                        "Daily email extraction limit not configured", user_id=user_id
+                    )
+
+                remaining = max(0, daily_limit - cached_usage)
+
+                if remaining <= 0:
+                    reset_time = datetime.now(UTC).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    ) + timedelta(days=1)
+                    raise RateLimitExceeded(
+                        f"Daily limit exceeded: {cached_usage}/{daily_limit} extractions used",
+                        used=cached_usage,
+                        limit=daily_limit,
+                        reset_time=reset_time,
+                    )
+
+                logger.info(
+                    "Rate limit check passed (cache)",
+                    user_id=user_id,
+                    remaining=remaining,
+                    used=cached_usage,
+                    limit=daily_limit,
+                    plan=plan_limits["plan_name"],
+                )
+
+                reset_time = datetime.now(UTC).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ) + timedelta(days=1)
+
+                return {
+                    "allowed": True,
+                    "remaining": remaining,
+                    "used_today": cached_usage,
+                    "daily_limit": daily_limit,
+                    "plan_name": plan_limits["plan_name"],
+                    "reset_time": reset_time,
+                    "last_extraction_at": None,
+                }
+
+            # Fallback to complete rate limit status from database
             status = await get_user_extraction_limit_status(user_id)
 
             # Check for database errors
@@ -89,6 +155,10 @@ class EmailStyleRateLimiter:
                     limit=status["daily_limit"],
                     reset_time=status.get("reset_time", datetime.now(UTC) + timedelta(days=1)),
                 )
+
+            # Cache usage count for faster subsequent checks
+            if cache_enabled:
+                await set_usage_count(user_id, status["used_today"])
 
             # Log successful check
             logger.info(
@@ -143,11 +213,20 @@ class EmailStyleRateLimiter:
         """
         try:
             metadata = metadata or {}
+            cache_enabled = settings.EMAIL_STYLE_REDIS_CACHE_ENABLED
+            redis_count = None
+
+            if cache_enabled:
+                redis_count = await increment_usage_count(user_id)
+                if redis_count is None:
+                    cache_enabled = False
 
             # Increment the counter in database
             increment_success = await increment_extraction_counter(user_id)
 
             if not increment_success:
+                if cache_enabled and redis_count is not None:
+                    await decrement_usage_count(user_id)
                 logger.error(
                     "Failed to increment extraction counter",
                     user_id=user_id,
@@ -167,7 +246,21 @@ class EmailStyleRateLimiter:
                 timestamp=datetime.now(UTC).isoformat(),
             )
 
-            # Get updated status to return
+            if cache_enabled and redis_count is not None:
+                plan_limits = await self._get_plan_limits(user_id)
+                daily_limit = plan_limits["daily_limit"]
+                remaining = max(0, daily_limit - redis_count)
+                return {
+                    "recorded": True,
+                    "success": success,
+                    "updated_usage": {
+                        "used_today": redis_count,
+                        "remaining": remaining,
+                        "daily_limit": daily_limit,
+                    },
+                }
+
+            # Fallback to database status
             updated_status = await get_user_extraction_limit_status(user_id)
 
             return {
@@ -204,6 +297,31 @@ class EmailStyleRateLimiter:
             dict: Current rate limit status
         """
         try:
+            cache_enabled = settings.EMAIL_STYLE_REDIS_CACHE_ENABLED
+            cached_usage = await get_usage_count(user_id) if cache_enabled else None
+
+            now = datetime.now(UTC)
+            reset_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            hours_until_reset = (reset_time - now).total_seconds() / 3600
+
+            if cached_usage is not None:
+                plan_limits = await self._get_plan_limits(user_id)
+                daily_limit = plan_limits["daily_limit"]
+                remaining = max(0, daily_limit - cached_usage)
+                can_extract = remaining > 0
+
+                return {
+                    "available": True,
+                    "can_extract": can_extract,
+                    "daily_limit": daily_limit,
+                    "used_today": cached_usage,
+                    "remaining": remaining,
+                    "plan_name": plan_limits["plan_name"],
+                    "reset_time": reset_time.isoformat(),
+                    "hours_until_reset": round(hours_until_reset, 1),
+                    "last_extraction_at": None,
+                }
+
             status = await get_user_extraction_limit_status(user_id)
 
             if "error" in status:
@@ -212,10 +330,8 @@ class EmailStyleRateLimiter:
                 )
                 return {"available": False, "error": status["error"]}
 
-            # Calculate time until reset (next midnight UTC)
-            now = datetime.now(UTC)
-            reset_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            hours_until_reset = (reset_time - now).total_seconds() / 3600
+            if cache_enabled:
+                await set_usage_count(user_id, status["used_today"])
 
             return {
                 "available": True,

@@ -27,6 +27,10 @@ async def lifespan(app: FastAPI):
 
     # Startup sequence
     logger.info("Application starting", environment=settings.environment, debug=settings.debug)
+    logger.info(
+        "Email style Redis cache flag",
+        email_style_redis_cache_enabled=settings.EMAIL_STYLE_REDIS_CACHE_ENABLED,
+    )
 
     startup_tasks = []
 
@@ -43,16 +47,19 @@ async def lifespan(app: FastAPI):
 
         logger.info("All services initialized successfully", services=startup_tasks)
 
-        # Enable token refresh job (OAuth cleanup disabled due to race conditions)
-        logger.info("Starting token refresh background job")
+        if settings.TOKEN_REFRESH_ENABLED:
+            # Enable token refresh job (OAuth cleanup disabled due to race conditions)
+            logger.info("Starting token refresh background job")
 
-        # Import token refresh job here, after database pool is ready
-        from app.jobs.token_refresh_job import start_token_refresh_scheduler
+            # Import token refresh job here, after database pool is ready
+            from app.jobs.token_refresh_job import start_token_refresh_scheduler
 
-        # Start token refresh job (runs every 10 minutes)
-        asyncio.create_task(start_token_refresh_scheduler())
+            # Start token refresh job (runs every 10 minutes)
+            asyncio.create_task(start_token_refresh_scheduler())
 
-        logger.info("Token refresh job started successfully")
+            logger.info("Token refresh job started successfully")
+        else:
+            logger.info("Token refresh background job disabled", env_flag="TOKEN_REFRESH_ENABLED")
 
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e), completed_tasks=startup_tasks)
@@ -115,7 +122,6 @@ app.include_router(onboarding.router)
 app.include_router(gmail_auth.router)
 app.include_router(calendar.router)
 app.include_router(gmail.router)  # Add this line
-app.include_router(calendar.router)
 
 
 @app.middleware("http")

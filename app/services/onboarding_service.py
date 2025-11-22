@@ -96,11 +96,13 @@ async def update_profile_name(
         SET
             display_name = %s,
             timezone = %s,
-            onboarding_step = 'gmail',
+            onboarding_step = CASE
+                WHEN onboarding_step IN ('start', 'gmail') THEN 'gmail'
+                ELSE onboarding_step
+            END,
             updated_at = NOW()
         WHERE
             id = %s
-            AND onboarding_step = 'start'
             AND is_active = true
         """
 
@@ -110,7 +112,7 @@ async def update_profile_name(
         # Check if any rows were updated
         if affected_rows == 0:
             logger.warning(
-                "Profile update failed - user not found or not in 'start' step",
+                "Profile update failed - user not found or inactive",
                 user_id=user_id,
                 current_step="unknown",
             )
@@ -166,6 +168,14 @@ async def complete_onboarding(user_id: str) -> UserProfile | None:
         if not profile:
             logger.warning("Onboarding completion failed - user not found", user_id=user_id)
             raise OnboardingServiceError("User not found", user_id=user_id)
+
+        # Allow idempotent completion calls once user already finished onboarding
+        if profile.onboarding_step == "completed" and profile.onboarding_completed:
+            logger.info(
+                "Onboarding completion request ignored - already completed",
+                user_id=user_id,
+            )
+            return profile
 
         # Validate current onboarding step
         if profile.onboarding_step != "email_style":
@@ -304,6 +314,21 @@ async def skip_email_style_step(user_id: str) -> UserProfile | None:
         if not profile:
             logger.warning("Email style skip failed - user not found", user_id=user_id)
             raise OnboardingServiceError("User not found", user_id=user_id)
+
+        # Idempotent: if already completed, ensure skip flag is set and return profile
+        if profile.onboarding_step == "completed" and profile.onboarding_completed:
+            flag_updated = await set_email_style_skipped(user_id, True)
+            if not flag_updated:
+                logger.warning(
+                    "Email style skip flag update failed for already-completed user",
+                    user_id=user_id,
+                )
+
+            logger.info(
+                "Email style skip request ignored - onboarding already completed",
+                user_id=user_id,
+            )
+            return profile
 
         if profile.onboarding_step != "email_style":
             logger.warning(
@@ -910,8 +935,9 @@ async def get_email_style_step_status(user_id: str) -> dict[str, Any]:
         if not profile:
             return {"error": "User not found"}
 
-        # Check if user is on email_style step
-        if profile.onboarding_step != "email_style":
+        # Allow users who already completed onboarding to fetch their final styles
+        allowed_email_style_steps = {"email_style", "completed"}
+        if profile.onboarding_step not in allowed_email_style_steps:
             return {
                 "error": f"User not on email_style step (currently on {profile.onboarding_step})",
                 "current_step": profile.onboarding_step,
@@ -923,7 +949,7 @@ async def get_email_style_step_status(user_id: str) -> dict[str, Any]:
         options_data = await get_email_style_selection_options(user_id)
 
         return {
-            "current_step": "email_style",
+            "current_step": profile.onboarding_step,
             "styles_created": options_data["styles_created"],
             "all_styles_complete": options_data["all_styles_complete"],
             "can_advance": options_data["can_advance"],

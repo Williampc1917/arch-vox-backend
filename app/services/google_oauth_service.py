@@ -4,12 +4,11 @@ Handles OAuth URL generation, token exchange, and Google API interactions.
 UPDATED: Now includes Calendar scopes for Gmail + Calendar triage functionality.
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import httpx
 
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger
@@ -37,6 +36,7 @@ GMAIL_CALENDAR_SCOPES = [
 REQUEST_TIMEOUT = 10  # seconds
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 2  # 2, 4, 8 seconds
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class GoogleOAuthError(Exception):
@@ -120,7 +120,6 @@ class GoogleOAuthService:
         self.client_secret = settings.GOOGLE_CLIENT_SECRET
         self.redirect_uri = settings.gmail_redirect_uri()
         self._validate_config()
-        self._session = self._create_session()
 
     def _validate_config(self) -> None:
         """Validate Google OAuth configuration."""
@@ -140,23 +139,61 @@ class GoogleOAuthService:
             calendar_scopes=len([s for s in GMAIL_CALENDAR_SCOPES if "calendar" in s]),
         )
 
-    def _create_session(self) -> requests.Session:
-        """Create requests session with retry strategy."""
-        session = requests.Session()
+    async def _post_with_retry(self, url: str, data: dict, operation: str) -> httpx.Response:
+        """
+        Perform POST request with retry/backoff handling.
 
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=MAX_RETRIES,
-            backoff_factor=BACKOFF_FACTOR,
-            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
-            allowed_methods=["GET", "POST"],  # Retry on these methods
-        )
+        Args:
+            url: Target URL
+            data: Form data payload
+            operation: Operation name for logging context
+        """
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        last_error: Exception | None = None
 
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    response = await client.post(url, data=data, headers=headers)
 
-        return session
+                    if (
+                        response.status_code in RETRY_STATUS_CODES
+                        and attempt < MAX_RETRIES
+                    ):
+                        wait_time = BACKOFF_FACTOR ** attempt
+                        logger.warning(
+                            "Google OAuth transient status",
+                            operation=operation,
+                            status_code=response.status_code,
+                            attempt=attempt,
+                            wait_time=wait_time,
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    return response
+
+                except httpx.RequestError as exc:
+                    last_error = exc
+
+                    if attempt == MAX_RETRIES:
+                        raise
+
+                    wait_time = BACKOFF_FACTOR ** attempt
+                    logger.warning(
+                        "Google OAuth request error, retrying",
+                        operation=operation,
+                        attempt=attempt,
+                        wait_time=wait_time,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    await asyncio.sleep(wait_time)
+
+        # All retries exhausted
+        if last_error:
+            raise last_error
+        raise GoogleOAuthError(f"{operation} failed: Unknown error")
 
     def generate_oauth_url(self, state: str) -> str:
         """
@@ -204,7 +241,7 @@ class GoogleOAuthService:
             )
             raise GoogleOAuthError(f"OAuth URL generation failed: {e}") from e
 
-    def exchange_code_for_tokens(self, authorization_code: str) -> TokenResponse:
+    async def exchange_code_for_tokens(self, authorization_code: str) -> TokenResponse:
         """
         Exchange authorization code for access and refresh tokens.
 
@@ -231,16 +268,13 @@ class GoogleOAuthService:
                 code_preview=authorization_code[:12] + "...",
             )
 
-            response = self._session.post(
-                GOOGLE_TOKEN_URL,
-                data=data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=REQUEST_TIMEOUT,
+            response = await self._post_with_retry(
+                GOOGLE_TOKEN_URL, data, operation="code_exchange"
             )
 
             return self._handle_token_response(response, "code_exchange")
 
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(
                 "Network error during token exchange",
                 code_preview=authorization_code[:12] + "...",
@@ -257,7 +291,7 @@ class GoogleOAuthService:
             )
             raise GoogleOAuthError(f"Token exchange failed: {e}") from e
 
-    def refresh_access_token(self, refresh_token: str) -> TokenResponse:
+    async def refresh_access_token(self, refresh_token: str) -> TokenResponse:
         """
         Refresh access token using refresh token.
 
@@ -283,11 +317,8 @@ class GoogleOAuthService:
                 refresh_token_preview=refresh_token[:12] + "...",
             )
 
-            response = self._session.post(
-                GOOGLE_TOKEN_URL,
-                data=data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=REQUEST_TIMEOUT,
+            response = await self._post_with_retry(
+                GOOGLE_TOKEN_URL, data, operation="token_refresh"
             )
 
             token_response = self._handle_token_response(response, "token_refresh")
@@ -300,7 +331,7 @@ class GoogleOAuthService:
 
             return token_response
 
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(
                 "Network error during token refresh",
                 refresh_token_preview=refresh_token[:12] + "...",
@@ -317,7 +348,7 @@ class GoogleOAuthService:
             )
             raise GoogleOAuthError(f"Token refresh failed: {e}") from e
 
-    def revoke_token(self, token: str) -> bool:
+    async def revoke_token(self, token: str) -> bool:
         """
         Revoke access or refresh token.
 
@@ -335,11 +366,8 @@ class GoogleOAuthService:
                 token_preview=token[:12] + "...",
             )
 
-            response = self._session.post(
-                GOOGLE_REVOKE_URL,
-                data=data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=REQUEST_TIMEOUT,
+            response = await self._post_with_retry(
+                GOOGLE_REVOKE_URL, data, operation="token_revocation"
             )
 
             success = response.status_code == 200
@@ -355,7 +383,7 @@ class GoogleOAuthService:
 
             return success
 
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(
                 "Network error during token revocation",
                 token_preview=token[:12] + "...",
@@ -431,7 +459,7 @@ class GoogleOAuthService:
                 "calendar_valid": False,
             }
 
-    def _handle_token_response(self, response: requests.Response, operation: str) -> TokenResponse:
+    def _handle_token_response(self, response: httpx.Response, operation: str) -> TokenResponse:
         """
         Handle and validate token response from Google.
 
@@ -453,7 +481,7 @@ class GoogleOAuthService:
         )
 
         # Handle HTTP errors
-        if not response.ok:
+        if not response.is_success:
             try:
                 error_data = response.json()
                 error_code = error_data.get("error", "unknown_error")
@@ -580,11 +608,11 @@ class GoogleOAuthService:
 
             # Test basic connectivity to Google (without making OAuth requests)
             try:
-                response = requests.head(GOOGLE_OAUTH_BASE_URL, timeout=5)
+                response = httpx.get(GOOGLE_OAUTH_BASE_URL, timeout=5.0)
                 health_data["google_connectivity"] = (
-                    "ok" if response.ok else f"error_{response.status_code}"
+                    "ok" if response.is_success else f"error_{response.status_code}"
                 )
-            except requests.exceptions.RequestException as e:
+            except httpx.RequestError as e:
                 health_data["google_connectivity"] = f"error_{type(e).__name__}"
                 health_data["healthy"] = False
 
@@ -609,19 +637,19 @@ def generate_google_oauth_url(state: str) -> str:
     return google_oauth_service.generate_oauth_url(state)
 
 
-def exchange_oauth_code(authorization_code: str) -> TokenResponse:
+async def exchange_oauth_code(authorization_code: str) -> TokenResponse:
     """Exchange authorization code for Gmail + Calendar tokens."""
-    return google_oauth_service.exchange_code_for_tokens(authorization_code)
+    return await google_oauth_service.exchange_code_for_tokens(authorization_code)
 
 
-def refresh_google_token(refresh_token: str) -> TokenResponse:
+async def refresh_google_token(refresh_token: str) -> TokenResponse:
     """Refresh Google access token for Gmail + Calendar."""
-    return google_oauth_service.refresh_access_token(refresh_token)
+    return await google_oauth_service.refresh_access_token(refresh_token)
 
 
-def revoke_google_token(token: str) -> bool:
+async def revoke_google_token(token: str) -> bool:
     """Revoke Google OAuth token."""
-    return google_oauth_service.revoke_token(token)
+    return await google_oauth_service.revoke_token(token)
 
 
 def validate_google_token_permissions(token_response: TokenResponse) -> dict:

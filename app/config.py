@@ -42,9 +42,14 @@ class Settings(BaseSettings):
     # Email Style Configuration
     EMAIL_STYLE_MAX_RETRIES: int = 3
     EMAIL_STYLE_TIMEOUT_SECONDS: int = 30
+    EMAIL_STYLE_REDIS_CACHE_ENABLED: bool = True
+
+    # Background job toggles
+    TOKEN_REFRESH_ENABLED: bool = False
 
     # =================================================================
-    # DATABASE POOL SETTINGS - Simple and configurable
+    # DATABASE POOL SETTINGS - Simple and con
+    # gurable
     # =================================================================
     DB_POOL_MIN_SIZE: int = 3
     DB_POOL_MAX_SIZE: int = 12

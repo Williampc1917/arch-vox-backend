@@ -28,6 +28,8 @@ class UserProfile(BaseModel):
     onboarding_completed: bool = False
     gmail_connected: bool = False
     onboarding_step: Literal["start", "profile", "gmail", "email_style", "completed"] = "start"
+    # Legacy compatibility field (frontend expects "step")
+    step: str | None = None
     email_style_skipped: bool = False
 
     voice_preferences: dict[str, Any]

@@ -118,6 +118,8 @@ class DatabasePoolManager:
         try:
             # per-connection setting
             conn.row_factory = dict_row
+            # Disable server-side prepared statements to avoid duplicate name errors
+            conn.prepare_threshold = None
 
             app_name = f"voice-gmail-{settings.environment}"
 
