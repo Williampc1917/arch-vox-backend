@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from app.config import settings
 from app.db.pool import db_pool  # Import the pool manager
 from app.infrastructure.observability.logging import get_logger, setup_logging
-from app.routes import calendar, gmail, gmail_auth, health, onboarding, protected
+from app.routes import calendar, gmail, gmail_auth, health, onboarding, onboarding_vip, protected
 from app.services.redis_client import fast_redis
 
 # Setup logging before creating the app
@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     )
 
     startup_tasks = []
+
 
     try:
         # Initialize database pool first
@@ -119,6 +120,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(protected.router)
 app.include_router(onboarding.router)
+app.include_router(onboarding_vip.router)
 app.include_router(gmail_auth.router)
 app.include_router(calendar.router)
 app.include_router(gmail.router)  # Add this line

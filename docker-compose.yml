@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      SERVICE_ROLE: web
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker_vip:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      SERVICE_ROLE: worker
+      WORKER_JOB: vip_backfill
+      VIP_BACKFILL_ENABLED: "true"
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  worker_token_refresh:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      SERVICE_ROLE: worker
+      WORKER_JOB: token_refresh
+      TOKEN_REFRESH_ENABLED: "true"
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  worker_oauth_cleanup:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      SERVICE_ROLE: worker
+      WORKER_JOB: oauth_cleanup
+    depends_on:
+      - web
+    restart: unless-stopped

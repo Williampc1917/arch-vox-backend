@@ -177,6 +177,51 @@ class FastRedisClient:
             logger.error("Redis DECR failed", key=key[:30], error=str(e))
             return None
 
+    async def push_to_list(self, key: str, value: str, left: bool = True) -> bool:
+        """
+        Push a value onto a Redis list (used as a lightweight queue).
+
+        Upstash fully supports LPUSH/RPUSH even on the serverless tier,
+        which makes this helper ideal for enqueuing VIP backfill jobs.
+        """
+
+        try:
+            await self._ensure_initialized()
+            if left:
+                result = await self.client.lpush(key, value)
+            else:
+                result = await self.client.rpush(key, value)
+            return result > 0
+        except Exception as e:
+            logger.error(
+                "Redis LIST push failed", key=key[:30], value_preview=value[:30], error=str(e)
+            )
+            return False
+
+    async def pop_from_list(self, key: str, timeout: int = 0) -> str | None:
+        """
+        Pop a value from a Redis list (supports blocking pops).
+
+        Args:
+            key: Redis list key
+            timeout: Optional seconds to wait for BRPOP; zero pops immediately.
+        """
+
+        try:
+            await self._ensure_initialized()
+            if timeout > 0:
+                result = await self.client.brpop(key, timeout=timeout)
+                if result:
+                    _, payload = result
+                else:
+                    payload = None
+            else:
+                payload = await self.client.rpop(key)
+            return payload
+        except Exception as e:
+            logger.error("Redis LIST pop failed", key=key[:30], error=str(e))
+            return None
+
 
 # Global instance
 fast_redis = FastRedisClient()

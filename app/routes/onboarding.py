@@ -79,6 +79,7 @@ async def get_status(claims: dict = Depends(auth_dependency)):
         gmail_connected=profile.gmail_connected,
         timezone=profile.timezone,
         email_style_skipped=profile.email_style_skipped,
+        completed_at=profile.updated_at if profile.onboarding_completed else None,
     )
 
     logger.info(

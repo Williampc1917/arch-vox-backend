@@ -90,6 +90,8 @@ async def update_profile_name(
         by iOS and stored but not required as user input.
         Advances to 'gmail' step to prepare for Gmail connection.
     """
+    await _ensure_onboarding_mutation_allowed(user_id, "update_profile_name")
+
     try:
         query = """
         UPDATE users
@@ -129,6 +131,8 @@ async def update_profile_name(
         # Return updated user profile (domain model)
         return await get_user_profile(user_id)
 
+    except OnboardingServiceError:
+        raise
     except DatabaseError as e:
         logger.error("Database error updating profile name", user_id=user_id, error=str(e))
         raise OnboardingServiceError(
@@ -841,6 +845,8 @@ async def advance_to_email_style_step(user_id: str) -> UserProfile | None:
     Advance user to email_style step after Gmail connection.
     Called automatically when Gmail OAuth completes successfully.
     """
+    await _ensure_onboarding_mutation_allowed(user_id, "advance_to_email_style_step")
+
     try:
         query = """
         UPDATE users
@@ -866,6 +872,8 @@ async def advance_to_email_style_step(user_id: str) -> UserProfile | None:
 
         return await get_user_profile(user_id)
 
+    except OnboardingServiceError:
+        raise
     except Exception as e:
         logger.error("Error advancing to email_style step", user_id=user_id, error=str(e))
         raise OnboardingServiceError(
@@ -959,3 +967,24 @@ async def get_email_style_step_status(user_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.error("Error getting email style step status", user_id=user_id, error=str(e))
         return {"error": f"Failed to get email style status: {e}"}
+
+
+async def _ensure_onboarding_mutation_allowed(user_id: str, action: str) -> None:
+    """
+    Guardrail to prevent onboarding transitions once a user has completed onboarding.
+    """
+    try:
+        profile = await get_user_profile(user_id)
+    except Exception:
+        # If profile lookup fails, allow caller to handle via existing error paths
+        return
+
+    if profile and profile.onboarding_step == "completed":
+        logger.error(
+            "Blocked onboarding mutation on completed user",
+            user_id=user_id,
+            action=action,
+        )
+        raise OnboardingServiceError(
+            "Onboarding already completed", user_id=user_id, recoverable=False
+        )

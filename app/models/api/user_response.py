@@ -37,6 +37,9 @@ class OnboardingStatusResponse(BaseModel):
     gmail_connected: bool
     timezone: str
     email_style_skipped: bool
+    completed_at: datetime | None = Field(
+        None, description="Timestamp when onboarding completed (if finished)"
+    )
 
 
 class OnboardingProfileUpdateResponse(BaseModel):

@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str | None = None
 
     ENCRYPTION_KEY: str | None = None
+    HASHING_SECRET: str
 
     # OpenAI settings
     OPENAI_API_KEY: str
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
 
     # Background job toggles
     TOKEN_REFRESH_ENABLED: bool = False
+    VIP_BACKFILL_ENABLED: bool = False
+    VIP_BACKFILL_QUEUE_NAME: str = "vip_backfill:pq"
 
     # =================================================================
     # DATABASE POOL SETTINGS - Simple and con
