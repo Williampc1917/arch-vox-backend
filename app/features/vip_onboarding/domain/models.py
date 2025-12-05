@@ -43,3 +43,18 @@ class VipCandidate:
     score: float
     rank: int
     sources: list[str]
+
+
+@dataclass(slots=True)
+class VipBackfillJob:
+    """Represents a user_vip_backfill_jobs row."""
+
+    id: str
+    user_id: str
+    status: str
+    attempts: int
+    trigger_reason: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_message: str | None

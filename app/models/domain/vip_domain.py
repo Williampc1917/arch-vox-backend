@@ -9,8 +9,8 @@ existing imports continue to work.
 from app.features.vip_onboarding.domain import (
     CalendarEventRecord,
     EmailMetadataRecord,
+    VipBackfillJob,
     VipCandidate,
 )
 
-__all__ = ["CalendarEventRecord", "EmailMetadataRecord", "VipCandidate"]
-
+__all__ = ["CalendarEventRecord", "EmailMetadataRecord", "VipCandidate", "VipBackfillJob"]
