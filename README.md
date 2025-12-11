@@ -7,7 +7,7 @@ triaging communication, tracking commitments, and adapting to their personal ema
 
 ---
 
-## 🌍 Overview
+## Overview
 
 Modern work runs on email and meetings — but what actually breaks is **context**.  
 We don’t fail because we forget messages; we fail because we forget **people**, what we
@@ -23,9 +23,9 @@ This repo contains the early product and infrastructure work behind that vision.
 
 ---
 
-## 🔭 Full Feature Set (Product Vision)
+## Full Feature Set (Product Vision)
 
-### 1️⃣ 🎙️ Voice-First Interface
+### 1️⃣ Voice-First Interface
 
 You don’t open an inbox — **you ask**.
 
@@ -36,7 +36,7 @@ You don’t open an inbox — **you ask**.
 
 ---
 
-### 2️⃣ ⭐ Top 20 VIP System
+### 2️⃣ Top 20 VIP System
 
 A transparent ranking system focused on the relationships that matter most.
 
@@ -47,7 +47,7 @@ A transparent ranking system focused on the relationships that matter most.
 
 ---
 
-### 3️⃣ 🧠 Relationship Engine (Lite)
+### 3️⃣ Relationship Engine (Lite)
 
 A lightweight relationship graph between the user and their VIPs.
 
@@ -83,7 +83,7 @@ A lightweight relationship graph between the user and their VIPs.
 
 ---
 
-### 4️⃣ 👤 Per-Person Context View
+### 4️⃣ Per-Person Context View
 
 A single view for each VIP that answers: **“Where did we leave off?”**
 
@@ -97,7 +97,7 @@ No “typical cadence” analytics — just clear, current, human-readable conte
 
 ---
 
-### 5️⃣ 🔔 Alerts & Nudges
+### 5️⃣ Alerts & Nudges
 
 Proactive nudges so you don’t drop the ball.
 
@@ -118,7 +118,7 @@ no opaque cadence models.
 
 ---
 
-### 6️⃣ 🌐 Relationship Dashboard
+### 6️⃣ Relationship Dashboard
 
 A simple, voice-first view of your top relationships.
 
@@ -129,7 +129,7 @@ A simple, voice-first view of your top relationships.
 
 ---
 
-### 7️⃣ 📥 + 🗓️ Gmail & Calendar Orchestration
+### 7️⃣ Gmail & Calendar Orchestration
 
 The underlying pipes that power the assistant.
 
@@ -145,7 +145,7 @@ The underlying pipes that power the assistant.
 
 ---
 
-### 8️⃣ 🎙️ Supported Voice Commands (MVP Surface)
+### 8️⃣ Supported Voice Commands (MVP Surface)
 
 - **“Catch me up”** – Brief VIP emails, today/tomorrow meetings, and overdue commitments  
 - **“Next”** – Move to the next triage item in the current session  
@@ -162,7 +162,7 @@ The underlying pipes that power the assistant.
 
 ---
 
-### 9️⃣ 🧪 Example Conversational Flow
+### 9️⃣ Example Conversational Flow
 
 **User:** “Catch me up.”  
 **Claro:** “4 VIP emails and 3 meetings today. Jennifer needs pricing; Sarah’s QBR is tomorrow.”  
@@ -178,7 +178,7 @@ The underlying pipes that power the assistant.
 
 ---
 
-## ✅ Current MVP Capabilities (Implemented)
+## Current MVP Capabilities (Implemented)
 
 Right now, the repo focuses on getting the **foundations** right:
 
@@ -201,7 +201,7 @@ Right now, the repo focuses on getting the **foundations** right:
 
 ---
 
-## 🚧 In Progress
+## In Progress
 
 Actively being developed:
 
@@ -223,7 +223,7 @@ Actively being developed:
 
 ---
 
-## 🏗️ Architecture & Tech Stack (High-Level)
+## Architecture & Tech Stack (High-Level)
 
 - **Client**
   - Native iOS app written in **Swift**
@@ -251,7 +251,7 @@ Actively being developed:
 
 ---
 
-## 🔐 Security & Privacy
+## Security & Privacy
 
 Claro AI is treated like a real product, not a demo. The backend is being built to align with
 Google’s OAuth limited-use requirements and SOC 2–style expectations.
@@ -292,7 +292,7 @@ documentation for data flows, key rotation, retention, and incident response.
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License**.  
 See the `LICENSE` file for details.
