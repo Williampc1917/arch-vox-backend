@@ -21,6 +21,16 @@ class EmailMetadataRecord:
     from_contact_hash: str
     to_contact_hash: str
     internal_timestamp: datetime
+    cc_contact_hashes: list[str]
+    is_reply: bool
+    has_attachment: bool
+    is_starred: bool
+    is_important: bool
+    is_promotional: bool
+    is_social: bool
+    subject_length: int
+    hour_of_day: int
+    day_of_week: int
 
 
 @dataclass(slots=True)
@@ -32,6 +42,14 @@ class CalendarEventRecord:
     start_time: datetime
     end_time: datetime
     attendee_hashes: list[str]
+    duration_minutes: int
+    is_recurring: bool
+    recurrence_rule: str | None
+    organizer_hash: str | None
+    user_is_organizer: bool
+    user_response: str | None
+    is_one_on_one: bool
+    event_type: str | None
 
 
 @dataclass(slots=True)

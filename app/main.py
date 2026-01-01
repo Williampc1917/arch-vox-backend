@@ -1,7 +1,6 @@
 # Updated app/main.py
-# Updated app/main.py
 """
-Updated main.py with database pool lifecycle management.
+Voice Gmail Assistant - Main application with audit logging and compliance.
 """
 
 import asyncio
@@ -13,6 +12,7 @@ from fastapi import FastAPI, Request
 from app.config import settings
 from app.db.pool import db_pool  # Import the pool manager
 from app.infrastructure.observability.logging import get_logger, setup_logging
+from app.middleware import RequestContextMiddleware  # Import audit middleware
 from app.routes import calendar, gmail, gmail_auth, health, onboarding, onboarding_vip, protected
 from app.services.redis_client import fast_redis
 
@@ -111,10 +111,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Voice Gmail Assistant",
-    description="Voice-first Gmail assistant with connection pooling",
+    description="Voice-first Gmail assistant with audit logging and compliance",
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# ============================================================================
+# MIDDLEWARE CONFIGURATION
+# ============================================================================
+# Middleware order matters! Applied in reverse order (bottom to top execution)
+
+# 1. Request Context Middleware (FIRST - adds request ID, IP, user-agent)
+#    This must run first so request.state is populated for other middleware
+app.add_middleware(RequestContextMiddleware)
+
+logger.info("Middleware configured", middleware=["RequestContextMiddleware"])
+
+# ============================================================================
+# ROUTER CONFIGURATION
+# ============================================================================
 
 # Include routers
 app.include_router(health.router)
@@ -123,12 +138,20 @@ app.include_router(onboarding.router)
 app.include_router(onboarding_vip.router)
 app.include_router(gmail_auth.router)
 app.include_router(calendar.router)
-app.include_router(gmail.router)  # Add this line
+app.include_router(gmail.router)
 
+
+# ============================================================================
+# REQUEST LOGGING (Custom Middleware)
+# ============================================================================
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log HTTP requests with timing."""
+    """
+    Log HTTP requests with timing and request context.
+
+    Enhanced with request ID, IP address from RequestContextMiddleware.
+    """
     start_time = time.time()
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
@@ -139,6 +162,8 @@ async def log_requests(request: Request, call_next):
         path=request.url.path,
         status_code=response.status_code,
         duration_ms=round(process_time, 2),
+        request_id=getattr(request.state, "request_id", None),
+        ip_address=getattr(request.state, "ip_address", None),
     )
     return response
 

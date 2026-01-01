@@ -13,3 +13,18 @@ from .services.backfill_service import VipBackfillService, vip_backfill_service 
 from .services.scheduler import enqueue_vip_backfill_job  # noqa: F401
 from .jobs.backfill_job import start_vip_backfill_scheduler  # noqa: F401
 from .domain.models import VipCandidate, EmailMetadataRecord, CalendarEventRecord  # noqa: F401
+from .pipeline.aggregation import contact_aggregation_service  # noqa: F401
+from .pipeline.scoring import scoring_service  # noqa: F401
+
+__all__ = [
+    "vip_router",
+    "VipBackfillService",
+    "vip_backfill_service",
+    "enqueue_vip_backfill_job",
+    "start_vip_backfill_scheduler",
+    "VipCandidate",
+    "EmailMetadataRecord",
+    "CalendarEventRecord",
+    "contact_aggregation_service",
+    "scoring_service",
+]

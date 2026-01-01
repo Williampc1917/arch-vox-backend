@@ -256,49 +256,51 @@ async def create_custom_email_style(
 
             return response
 
-        # Success - complete email style selection in onboarding
-        from app.services.onboarding_service import complete_email_style_selection
+        # Success - complete email style selection and advance to vip_selection
+        from app.services.onboarding_service import (
+            advance_to_vip_selection_step,
+            complete_email_style_selection,
+        )
 
         selection_profile = await complete_email_style_selection(
             user_id, "custom", result["style_profiles"]
         )
 
-        completed_profile = None
         next_step = "email_style"
 
         if selection_profile and selection_profile.onboarding_completed:
-            completed_profile = selection_profile
+            # User already completed - don't modify their step
             next_step = "completed"
             logger.info(
                 "3-profile selection stored for user already marked completed",
                 user_id=user_id,
             )
         else:
-            # Complete onboarding now that all 3 styles are created
+            # Advance to vip_selection step now that all 3 styles are created
             try:
-                completed_profile = await complete_onboarding(user_id)
-                if completed_profile:
-                    next_step = "completed"
+                vip_step_profile = await advance_to_vip_selection_step(user_id)
+                if vip_step_profile:
+                    next_step = "vip_selection"
                     logger.info(
-                        "Onboarding completed after 3-profile creation",
+                        "Advanced to vip_selection after 3-profile creation",
                         user_id=user_id,
                         extraction_grades=result.get("extraction_grades"),
                     )
                 else:
                     logger.warning(
-                        "3 profiles created but onboarding completion failed",
+                        "3 profiles created but advancement to vip_selection failed",
                         user_id=user_id,
                     )
             except OnboardingServiceError as e:
                 logger.warning(
-                    "Failed onboarding completion after 3-profile creation",
+                    "Failed advancement to vip_selection after 3-profile creation",
                     user_id=user_id,
                     error=str(e),
                     recoverable=e.recoverable,
                 )
             except Exception as e:
                 logger.error(
-                    "Unexpected error completing onboarding after 3-profile creation",
+                    "Unexpected error advancing to vip_selection after 3-profile creation",
                     user_id=user_id,
                     error=str(e),
                 )
@@ -372,12 +374,15 @@ async def skip_email_style(claims: dict = Depends(auth_dependency)):
             detail="Failed to skip email style step",
         )
 
-    # Preserve current onboarding step, but signal next step for clients
-    next_step = "completed" if profile.onboarding_completed else "email_style"
+    # Determine next step based on current onboarding state
+    if profile.onboarding_completed:
+        next_step = "completed"
+    else:
+        next_step = profile.onboarding_step  # Should be "vip_selection" after skip
 
     response = EmailStyleSkipResponse(
         success=True,
-        message="Email style selection skipped. You can create custom styles later in settings.",
+        message="Email style selection skipped. Proceeding to VIP selection.",
         user_profile=profile,
         next_step=next_step,
         onboarding_completed=profile.onboarding_completed,
@@ -399,12 +404,15 @@ async def complete(claims: dict = Depends(auth_dependency)):
     Mark onboarding as completed.
 
     Prerequisites:
-        - User must be on 'email_style' onboarding step
+        - User must be on 'vip_selection' onboarding step
         - User must have gmail_connected = true
-        - User must have all 3 email styles created
+        - User must have completed VIP selection
 
     Returns:
         OnboardingCompleteResponse: Success status and updated user profile
+
+    Note:
+        This endpoint is typically called automatically after VIP selection.
     """
     user_id = claims.get("sub")
     if not user_id:
@@ -420,7 +428,7 @@ async def complete(claims: dict = Depends(auth_dependency)):
         logger.warning("Onboarding completion failed - prerequisites not met", user_id=user_id)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot complete onboarding. Please ensure you have connected Gmail and created all 3 email styles.",
+            detail="Cannot complete onboarding. Please ensure you have connected Gmail and completed VIP selection.",
         )
 
     response = OnboardingCompleteResponse(
@@ -433,7 +441,7 @@ async def complete(claims: dict = Depends(auth_dependency)):
         "Onboarding completed successfully",
         user_id=user_id,
         user_email=profile.email,
-        step_transition="email_style → completed",
+        step_transition="vip_selection → completed",
     )
 
     return response

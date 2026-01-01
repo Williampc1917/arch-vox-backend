@@ -56,6 +56,22 @@ class VipRepository:
         )
 
     @classmethod
+    @classmethod
+    async def load_latest_job_for_user(cls, user_id: str) -> VipBackfillJob | None:
+        """Fetch the most recent job for a user."""
+
+        query = f"""
+            SELECT {cls.JOB_SELECT_COLUMNS}
+            FROM user_vip_backfill_jobs
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+
+        row = await fetch_one(query, (user_id,))
+        return cls._row_to_job(row)
+
+    @classmethod
     async def create_job(cls, user_id: str, trigger_reason: str) -> VipBackfillJob:
         """
         Insert a new job row (status=pending) and return the record.
@@ -155,6 +171,16 @@ class VipRepository:
                 record.to_contact_hash,
                 record.internal_timestamp,
                 record.direction,
+                record.cc_contact_hashes,
+                record.is_reply,
+                record.has_attachment,
+                record.is_starred,
+                record.is_important,
+                record.is_promotional,
+                record.is_social,
+                record.subject_length,
+                record.hour_of_day,
+                record.day_of_week,
             )
             for record in records
         ]
@@ -166,9 +192,12 @@ class VipRepository:
             INSERT INTO email_metadata (
                 user_id, message_id, thread_id,
                 from_contact_hash, to_contact_hash,
-                timestamp, direction
+                timestamp, direction,
+                cc_contact_hashes, is_reply, has_attachment,
+                is_starred, is_important, is_promotional, is_social,
+                subject_length, hour_of_day, day_of_week
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, message_id) DO NOTHING
         """
 
@@ -194,6 +223,14 @@ class VipRepository:
                 record.start_time,
                 record.end_time,
                 record.attendee_hashes,
+                record.duration_minutes,
+                record.is_recurring,
+                record.recurrence_rule,
+                record.organizer_hash,
+                record.user_is_organizer,
+                record.user_response,
+                record.is_one_on_one,
+                record.event_type,
             )
             for record in records
         ]
@@ -203,9 +240,12 @@ class VipRepository:
 
         insert_query = """
             INSERT INTO events_metadata (
-                user_id, event_id, start_time, end_time, attendee_contact_hashes
+                user_id, event_id, start_time, end_time, attendee_contact_hashes,
+                duration_minutes, is_recurring, recurrence_rule,
+                organizer_hash, user_is_organizer, user_response,
+                is_one_on_one, event_type
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, event_id) DO NOTHING
         """
 

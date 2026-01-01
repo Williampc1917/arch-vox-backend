@@ -27,7 +27,7 @@ class UserProfile(BaseModel):
     timezone: str = "UTC"
     onboarding_completed: bool = False
     gmail_connected: bool = False
-    onboarding_step: Literal["start", "profile", "gmail", "email_style", "completed"] = "start"
+    onboarding_step: Literal["start", "profile", "gmail", "email_style", "vip_selection", "completed"] = "start"
     # Legacy compatibility field (frontend expects "step")
     step: str | None = None
     email_style_skipped: bool = False

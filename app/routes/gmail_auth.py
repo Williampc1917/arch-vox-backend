@@ -7,6 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 
 from app.auth.verify import auth_dependency
+from app.config import settings
+from app.features.vip_onboarding.services.scheduler import (
+    VipSchedulerError,
+    enqueue_vip_backfill_job,
+)
 from app.infrastructure.observability.logging import get_logger
 from app.models.api.oauth_request import GmailAuthCallbackRequest
 from app.models.api.oauth_response import (
@@ -242,6 +247,16 @@ async def oauth_callback(
                 next_step=response.next_step,
                 onboarding_completed=response.onboarding_completed,
             )
+
+            if settings.VIP_BACKFILL_ENABLED:
+                try:
+                    await enqueue_vip_backfill_job(user_id, trigger_reason="gmail_connect")
+                except VipSchedulerError as exc:
+                    logger.warning(
+                        "Failed to enqueue VIP backfill job",
+                        user_id=user_id,
+                        error=str(exc),
+                    )
 
             return response
         else:
