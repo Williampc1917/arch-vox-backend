@@ -51,6 +51,8 @@ class EventMetadataRow:
 class ContactAggregate:
     user_id: str
     contact_hash: str
+    email: str | None
+    display_name: str | None
     email_count_30d: int
     inbound_count_30d: int
     outbound_count_30d: int
@@ -178,7 +180,7 @@ class ContactAggregationRepository:
     async def upsert_contacts(cls, aggregates: Iterable[ContactAggregate]) -> None:
         query = """
             INSERT INTO contacts (
-                user_id, contact_hash, email_count_30d,
+                user_id, contact_hash, email, display_name, email_count_30d,
                 inbound_count_30d, outbound_count_30d, direct_email_count, cc_email_count,
                 thread_count_30d, avg_thread_depth, attachment_email_count,
                 starred_email_count, important_email_count, reply_rate_30d,
@@ -190,7 +192,7 @@ class ContactAggregationRepository:
                 updated_at
             )
             VALUES (
-                %(user_id)s, %(contact_hash)s, %(email_count_30d)s,
+                %(user_id)s, %(contact_hash)s, %(email)s, %(display_name)s, %(email_count_30d)s,
                 %(inbound_count_30d)s, %(outbound_count_30d)s, %(direct_email_count)s, %(cc_email_count)s,
                 %(thread_count_30d)s, %(avg_thread_depth)s, %(attachment_email_count)s,
                 %(starred_email_count)s, %(important_email_count)s, %(reply_rate_30d)s,
@@ -203,6 +205,8 @@ class ContactAggregationRepository:
             )
             ON CONFLICT (user_id, contact_hash)
             DO UPDATE SET
+                email = EXCLUDED.email,
+                display_name = EXCLUDED.display_name,
                 email_count_30d = EXCLUDED.email_count_30d,
                 inbound_count_30d = EXCLUDED.inbound_count_30d,
                 outbound_count_30d = EXCLUDED.outbound_count_30d,
@@ -241,6 +245,7 @@ class ContactAggregationRepository:
             SELECT
                 id,
                 contact_hash,
+                email,
                 display_name,
                 first_contact_at,
                 last_contact_at,

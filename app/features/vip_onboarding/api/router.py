@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.auth.verify import auth_dependency
+from app.config import settings
 from app.features.vip_onboarding.pipeline.aggregation import contact_aggregation_service
 from app.features.vip_onboarding.pipeline.scoring import scoring_service
 from app.infrastructure.observability.logging import get_logger
+from app.middleware.rate_limit_dependencies import rate_limit_user
 from app.services.onboarding_service import get_onboarding_status
 from app.utils.audit_helpers import audit_data_modification, audit_pii_access
 
@@ -157,12 +159,18 @@ async def list_vip_candidates(
     request: Request,
     claims: dict = Depends(auth_dependency),
     limit: int = Query(50, ge=1, le=100),
+    _rate: None = Depends(
+        lambda r, c=Depends(auth_dependency): rate_limit_user(
+            r, c, user_limit=settings.get_rate_limits()["vip_endpoints"]
+        )
+    ),
 ) -> dict:
     """
     Return aggregated contacts to be used as VIP candidates.
 
-    This endpoint accesses PII (display names) and is audit logged
-    for Gmail API compliance.
+    This endpoint accesses PII (display names) and is:
+    - Audit logged for Gmail API compliance
+    - Rate limited to prevent data scraping (60 req/min in production)
     """
 
     user_id = claims.get("sub")
@@ -183,24 +191,23 @@ async def list_vip_candidates(
         )
         return {"vips": []}
 
-    # ✅ AUDIT LOG: Track PII access (display names)
+    # ✅ AUDIT LOG: Track PII access (display names, emails)
     await audit_pii_access(
         request=request,
         user_id=user_id,
         action="vip_candidates_viewed",
         resource_type="vip_contacts",
         resource_count=len(candidates),
-        pii_fields=["display_name", "contact_hash"],
+        pii_fields=["email", "display_name", "contact_hash"],
         metadata={"requested_limit": limit, "returned_count": len(candidates)},
     )
 
     serialized = [
         {
             "contact_hash": c.contact_hash,
+            "email": c.email,
             "display_name": c.display_name,
             "vip_score": round(c.vip_score, 4),
-            "confidence_score": round(c.confidence_score, 4),
-            "component_scores": c.component_scores,
             "metrics": c.raw_metrics,
         }
         for c in candidates
@@ -214,11 +221,18 @@ async def save_vip_selection(
     req: Request,
     vip_request: VipSelectionRequest,
     claims: dict = Depends(auth_dependency),
+    _rate: None = Depends(
+        lambda r, c=Depends(auth_dependency): rate_limit_user(
+            r, c, user_limit=settings.get_rate_limits()["write_endpoints"]
+        )
+    ),
 ):
     """
     Save user's VIP selection.
 
-    This endpoint modifies user data and is audit logged for compliance.
+    This endpoint modifies user data and is:
+    - Audit logged for compliance
+    - Rate limited to prevent spam writes (30 req/min in production)
     """
     user_id = claims.get("sub")
     if not user_id:

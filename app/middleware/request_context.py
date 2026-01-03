@@ -33,6 +33,7 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.config import settings
 from app.infrastructure.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -48,6 +49,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     - user_agent: Client user agent string
 
     Also adds X-Request-ID header to responses for client-side tracing.
+
+    Request.state Namespace Convention:
+    - request_id, ip_address, user_agent: Set by RequestContextMiddleware
+    - rate_limit_info: Set by rate limit dependencies
+    - Do not add other attributes without updating this documentation
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -57,18 +63,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
 
-        # Extract client IP address
-        # Check X-Forwarded-For header first (for proxies/load balancers)
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-            # The first one is the original client
-            ip_address = forwarded_for.split(",")[0].strip()
-        elif request.client:
-            ip_address = request.client.host
-        else:
-            ip_address = None
-
+        # Extract client IP address with proxy protection
+        ip_address = self._extract_client_ip(request)
         request.state.ip_address = ip_address
 
         # Extract user agent
@@ -92,3 +88,41 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = request_id
 
         return response
+
+    def _extract_client_ip(self, request: Request) -> str | None:
+        """
+        Extract client IP address with proxy spoofing protection.
+
+        Only trusts X-Forwarded-For header if:
+        1. TRUST_X_FORWARDED_FOR is enabled (production with load balancer)
+        2. Request comes from a trusted proxy IP
+
+        This prevents attackers from spoofing their IP to bypass rate limiting.
+
+        Args:
+            request: FastAPI Request
+
+        Returns:
+            Client IP address or None
+        """
+        # If not trusting X-Forwarded-For (local dev), use direct connection IP
+        if not settings.TRUST_X_FORWARDED_FOR:
+            return request.client.host if request.client else None
+
+        # In production with load balancer: validate proxy is trusted
+        if request.client and request.client.host in settings.TRUSTED_PROXY_IPS:
+            # Request came from trusted proxy - trust X-Forwarded-For header
+            forwarded_for = request.headers.get("x-forwarded-for")
+            if forwarded_for:
+                # X-Forwarded-For format: "client, proxy1, proxy2"
+                # First IP is the original client
+                ip_address = forwarded_for.split(",")[0].strip()
+                logger.debug(
+                    "Using X-Forwarded-For from trusted proxy",
+                    proxy_ip=request.client.host,
+                    client_ip=ip_address,
+                )
+                return ip_address
+
+        # Fallback to direct connection IP
+        return request.client.host if request.client else None

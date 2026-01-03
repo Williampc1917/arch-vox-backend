@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 class AggregatedContact:
     user_id: str
     contact_hash: str
+    email: str | None
     display_name: str | None
     last_contact_at: datetime | None
     email_count_30d: int
@@ -55,6 +56,7 @@ class AggregatedContact:
 @dataclass(slots=True)
 class ScoredContact:
     contact_hash: str
+    email: str | None
     display_name: str | None
     vip_score: float
     confidence_score: float
@@ -137,6 +139,7 @@ class ScoringService:
             contact = AggregatedContact(
                 user_id=user_id,
                 contact_hash=row["contact_hash"],
+                email=row.get("email"),
                 display_name=row.get("display_name"),
                 last_contact_at=row.get("last_contact_at"),
                 email_count_30d=row.get("email_count_30d", 0),
@@ -192,6 +195,7 @@ class ScoringService:
             cached_contacts.append(
                 ScoredContact(
                     contact_hash=row["contact_hash"],
+                    email=row.get("email"),
                     display_name=row.get("display_name"),
                     vip_score=row["vip_score"],
                     confidence_score=row.get("confidence_score", 0.5),
@@ -216,6 +220,7 @@ class ScoringService:
         return AggregatedContact(
             user_id=user_id,
             contact_hash=row["contact_hash"],
+            email=row.get("email"),
             display_name=row.get("display_name"),
             first_contact_at=row.get("first_contact_at"),
             last_contact_at=row.get("last_contact_at"),
@@ -241,7 +246,6 @@ class ScoringService:
             recurring_meeting_count=row.get("recurring_meeting_count", 0),
             meetings_you_organized=row.get("meetings_you_organized", 0),
             meetings_they_organized=row.get("meetings_they_organized", 0),
-            first_contact_at=row.get("first_contact_at"),
             consistency_score=row.get("consistency_score", 0.5) or 0.5,
             initiation_score=row.get("initiation_score", 0.5) or 0.5,
         )
@@ -306,6 +310,7 @@ class ScoringService:
 
         return ScoredContact(
             contact_hash=contact.contact_hash,
+            email=contact.email,
             display_name=contact.display_name,
             vip_score=score,
             confidence_score=confidence,

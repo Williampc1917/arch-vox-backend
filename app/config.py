@@ -51,8 +51,68 @@ class Settings(BaseSettings):
     VIP_BACKFILL_QUEUE_NAME: str = "vip_backfill:pq"
 
     # =================================================================
-    # DATABASE POOL SETTINGS - Simple and con
-    # gurable
+    # RATE LIMITING SETTINGS - Anti-abuse and compliance
+    # =================================================================
+    # Enable/disable rate limiting globally
+    RATE_LIMIT_ENABLED: bool = True
+
+    # Default rate limits (per-user, per minute)
+    RATE_LIMIT_USER_PER_MINUTE: int = 1000  # Generous for development
+    RATE_LIMIT_IP_PER_MINUTE: int = 2000    # Higher for IP-based
+
+    # Endpoint-specific rate limits
+    RATE_LIMIT_VIP_ENDPOINTS: int = 500      # VIP endpoints (PII access)
+    RATE_LIMIT_WRITE_ENDPOINTS: int = 300    # Write operations
+    RATE_LIMIT_READ_ENDPOINTS: int = 1000    # Read operations
+
+    # Rate limiter behavior
+    RATE_LIMIT_WINDOW_SECONDS: int = 60      # Time window (1 minute)
+    RATE_LIMIT_FAIL_OPEN: bool = True        # Allow requests if Redis fails
+
+    # =================================================================
+    # SECURITY SETTINGS - CORS, Headers, HTTPS
+    # =================================================================
+    # CORS (Cross-Origin Resource Sharing)
+    CORS_ENABLED: bool = True
+    CORS_ALLOW_CREDENTIALS: bool = True
+    CORS_MAX_AGE: int = 600  # 10 minutes
+
+    # Security Headers
+    SECURITY_HEADERS_ENABLED: bool = True
+
+    # HTTPS Enforcement (production only)
+    HTTPS_ENFORCE: bool = False  # Disabled in dev, enabled in prod
+    HTTPS_REDIRECT_STATUS_CODE: int = 308  # Permanent redirect
+
+    # Trusted Proxies (for X-Forwarded-For validation)
+    # In local dev: Trust localhost
+    # In GCP: Trust internal load balancer IPs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    TRUSTED_PROXY_IPS: list[str] = ["127.0.0.1", "::1"]  # Localhost only in dev
+    TRUST_X_FORWARDED_FOR: bool = False  # Disabled in dev (no proxy), enabled in prod
+
+    # Request Size Limits (prevent DOS via huge payloads)
+    MAX_REQUEST_SIZE_MB: int = 10  # Maximum request body size in MB
+    MAX_REQUEST_SIZE_BYTES: int = 10 * 1024 * 1024  # 10MB in bytes
+
+    # =================================================================
+    # DATA RETENTION & GDPR SETTINGS
+    # =================================================================
+    # Data retention periods (in days)
+    DATA_RETENTION_CACHED_DATA_DAYS: int = 90  # OAuth tokens, email cache, VIP data
+    DATA_RETENTION_AUDIT_LOGS_DAYS: int = 365  # 1 year for audit logs (compliance)
+    DATA_RETENTION_GRACE_PERIOD_DAYS: int = 30  # Soft delete grace period
+
+    # Data cleanup job
+    DATA_CLEANUP_ENABLED: bool = False  # Disabled in dev, enabled in prod
+    DATA_CLEANUP_SCHEDULE_HOUR: int = 2  # Run at 2 AM (low traffic)
+
+    # GDPR features
+    GDPR_DATA_EXPORT_ENABLED: bool = True  # Allow users to export their data
+    GDPR_DATA_DELETION_ENABLED: bool = True  # Allow users to delete their data
+    GDPR_REVOKE_OAUTH_ON_DELETE: bool = True  # Revoke OAuth tokens with Google
+
+    # =================================================================
+    # DATABASE POOL SETTINGS - Simple and configurable
     # =================================================================
     DB_POOL_MIN_SIZE: int = 3
     DB_POOL_MAX_SIZE: int = 12
@@ -120,6 +180,125 @@ class Settings(BaseSettings):
             pass
 
         return config
+
+    def get_rate_limits(self) -> dict:
+        """
+        Get rate limits adjusted for environment.
+
+        Development: Very generous (won't block during testing)
+        Production: Strict (protect against abuse)
+        """
+        if self.environment == "development":
+            return {
+                "user_per_minute": 1000,    # Very generous
+                "ip_per_minute": 2000,
+                "vip_endpoints": 500,
+                "write_endpoints": 300,
+                "read_endpoints": 1000,
+            }
+        elif self.environment == "production":
+            return {
+                "user_per_minute": 100,     # Stricter for production
+                "ip_per_minute": 200,
+                "vip_endpoints": 60,
+                "write_endpoints": 30,
+                "read_endpoints": 100,
+            }
+        else:
+            # Default to configured values
+            return {
+                "user_per_minute": self.RATE_LIMIT_USER_PER_MINUTE,
+                "ip_per_minute": self.RATE_LIMIT_IP_PER_MINUTE,
+                "vip_endpoints": self.RATE_LIMIT_VIP_ENDPOINTS,
+                "write_endpoints": self.RATE_LIMIT_WRITE_ENDPOINTS,
+                "read_endpoints": self.RATE_LIMIT_READ_ENDPOINTS,
+            }
+
+    def get_cors_origins(self) -> list[str]:
+        """
+        Get CORS allowed origins based on environment.
+
+        Development: Allow localhost (iOS simulator, web testing)
+        Production: Lock down to specific domains only
+        """
+        if self.environment == "development":
+            # Allow all common localhost ports for development
+            return [
+                "http://localhost:3000",      # React/Next.js default
+                "http://localhost:8000",      # Backend (self)
+                "http://localhost:8080",      # Alternative web port
+                "http://127.0.0.1:3000",      # IPv4 localhost
+                "http://127.0.0.1:8000",
+                "http://127.0.0.1:8080",
+                "capacitor://localhost",      # iOS Capacitor (if using)
+                "ionic://localhost",          # Ionic (if using)
+            ]
+        elif self.environment == "production":
+            # Production: Lock down to specific domains
+            # TODO: Replace with your actual production domains
+            return [
+                "https://your-app-domain.com",  # Your web dashboard (if any)
+                # iOS native apps don't need CORS (they're not browsers)
+                # Add any web frontends here
+            ]
+        else:
+            # Staging/test: Similar to dev but with HTTPS
+            return [
+                "https://staging.your-app-domain.com",
+                "http://localhost:3000",
+            ]
+
+    def get_security_config(self) -> dict:
+        """
+        Get security configuration based on environment.
+
+        Returns headers, HTTPS enforcement, etc.
+        """
+        if self.environment == "production":
+            return {
+                "cors_enabled": self.CORS_ENABLED,
+                "security_headers_enabled": self.SECURITY_HEADERS_ENABLED,
+                "https_enforce": True,  # Always enforce HTTPS in production
+                "max_request_size_bytes": self.MAX_REQUEST_SIZE_BYTES,
+            }
+        else:
+            # Development: Relaxed security (HTTP allowed)
+            return {
+                "cors_enabled": self.CORS_ENABLED,
+                "security_headers_enabled": self.SECURITY_HEADERS_ENABLED,
+                "https_enforce": False,  # Allow HTTP in dev
+                "max_request_size_bytes": self.MAX_REQUEST_SIZE_BYTES,
+            }
+
+    def get_data_retention_config(self) -> dict:
+        """
+        Get data retention configuration based on environment.
+
+        Returns retention periods, cleanup settings, GDPR features.
+        """
+        if self.environment == "production":
+            return {
+                "cached_data_days": self.DATA_RETENTION_CACHED_DATA_DAYS,
+                "audit_logs_days": self.DATA_RETENTION_AUDIT_LOGS_DAYS,
+                "grace_period_days": self.DATA_RETENTION_GRACE_PERIOD_DAYS,
+                "cleanup_enabled": True,  # Always enable cleanup in production
+                "cleanup_schedule_hour": self.DATA_CLEANUP_SCHEDULE_HOUR,
+                "data_export_enabled": self.GDPR_DATA_EXPORT_ENABLED,
+                "data_deletion_enabled": self.GDPR_DATA_DELETION_ENABLED,
+                "revoke_oauth_on_delete": self.GDPR_REVOKE_OAUTH_ON_DELETE,
+            }
+        else:
+            # Development: Manual cleanup only
+            return {
+                "cached_data_days": self.DATA_RETENTION_CACHED_DATA_DAYS,
+                "audit_logs_days": self.DATA_RETENTION_AUDIT_LOGS_DAYS,
+                "grace_period_days": self.DATA_RETENTION_GRACE_PERIOD_DAYS,
+                "cleanup_enabled": False,  # Disable automatic cleanup in dev
+                "cleanup_schedule_hour": self.DATA_CLEANUP_SCHEDULE_HOUR,
+                "data_export_enabled": self.GDPR_DATA_EXPORT_ENABLED,
+                "data_deletion_enabled": self.GDPR_DATA_DELETION_ENABLED,
+                "revoke_oauth_on_delete": self.GDPR_REVOKE_OAUTH_ON_DELETE,
+            }
 
 
 settings = Settings()

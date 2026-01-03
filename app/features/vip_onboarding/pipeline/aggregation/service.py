@@ -252,6 +252,8 @@ class ContactAggregationService:
             aggregate = ContactAggregate(
                 user_id=user_id,
                 contact_hash=contact_hash,
+                email=None,  # TODO: Populate from backfill service contact mapping
+                display_name=None,  # TODO: Populate from backfill service contact mapping
                 email_count_30d=working.email_count,
                 inbound_count_30d=working.inbound_count,
                 outbound_count_30d=working.outbound_count,

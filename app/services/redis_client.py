@@ -1,4 +1,6 @@
 # app/services/redis_client.py
+from urllib.parse import urlparse
+
 import redis.asyncio as redis
 from redis.asyncio.connection import ConnectionPool
 
@@ -56,19 +58,21 @@ class FastRedisClient:
             raise RuntimeError("Redis initialization failed") from e
 
     def _build_upstash_redis_url(self) -> str:
-        """Build proper Redis URL for Upstash native protocol"""
+        """Build proper Redis URL for Upstash native protocol."""
         try:
-            # Get the base host from REST URL
-            rest_url = settings.UPSTASH_REDIS_REST_URL
+            rest_url = settings.UPSTASH_REDIS_REST_URL.strip()
             token = settings.UPSTASH_REDIS_REST_TOKEN
 
-            # Extract host from REST URL: https://redis-12345.upstash.io
-            if rest_url.startswith("https://"):
-                host = rest_url.replace("https://", "").strip("/")
-            else:
-                host = rest_url.replace("http://", "").strip("/")
+            parsed = urlparse(rest_url)
+            host = parsed.hostname
+            if not host:
+                parsed = urlparse(f"https://{rest_url}")
+                host = parsed.hostname
 
-            # For Upstash native Redis protocol, use port 6379 or 6380
+            if not host:
+                raise ValueError("UPSTASH_REDIS_REST_URL does not include a valid hostname")
+
+            # For Upstash native Redis protocol, use port 6379 or 6380.
             # Format: rediss://default:password@host:6379
             redis_url = f"rediss://default:{token}@{host}:6379"
 

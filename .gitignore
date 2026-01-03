@@ -40,3 +40,6 @@ htmlcov/
 
 # Docker/compose cache
 *.log
+
+# Documentation (generated/working docs, not tracked)
+docs/
