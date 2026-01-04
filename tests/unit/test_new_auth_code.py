@@ -20,7 +20,7 @@ from app.models.api.user_response import AuthMeta, UserProfileResponse
 from app.models.domain.user_domain import Plan, UserProfile
 
 # Test the service
-from app.services.user_service import get_user_profile
+from app.services.core.user_service import get_user_profile
 
 
 def test_user_models_work():

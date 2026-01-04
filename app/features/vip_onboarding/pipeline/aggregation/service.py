@@ -11,7 +11,10 @@ import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, DefaultDict
+
+from app.infrastructure.observability.logging import get_logger
+from app.security.hashing import hash_email
+from app.services.core.user_service import get_user_profile
 
 from .repository import (
     ContactAggregate,
@@ -19,9 +22,6 @@ from .repository import (
     EmailMetadataRow,
     EventMetadataRow,
 )
-from app.infrastructure.observability.logging import get_logger
-from app.security.hashing import hash_email
-from app.services.user_service import get_user_profile
 
 logger = get_logger(__name__)
 
@@ -43,7 +43,7 @@ class _ContactWorkingSet:
     starred_count: int = 0
     important_count: int = 0
     thread_ids: set[str] = field(default_factory=set)
-    thread_messages: DefaultDict[str, list[_ThreadMessage]] = field(
+    thread_messages: defaultdict[str, list[_ThreadMessage]] = field(
         default_factory=lambda: defaultdict(list)
     )
     timestamps: list[datetime] = field(default_factory=list)
@@ -66,7 +66,9 @@ class ContactAggregationService:
     async def aggregate_contacts_for_user(self, user_id: str) -> int:
         profile = await get_user_profile(user_id)
         if not profile or not profile.email:
-            logger.warning("Skipping contact aggregation - user profile missing email", user_id=user_id)
+            logger.warning(
+                "Skipping contact aggregation - user profile missing email", user_id=user_id
+            )
             return 0
 
         user_email_hash = hash_email(profile.email)
@@ -74,7 +76,9 @@ class ContactAggregationService:
         email_window_start = now - timedelta(days=self.EMAIL_LOOKBACK_DAYS)
         meeting_window_start = now - timedelta(days=self.MEETING_LOOKBACK_DAYS)
 
-        emails = await ContactAggregationRepository.fetch_email_metadata(user_id, email_window_start)
+        emails = await ContactAggregationRepository.fetch_email_metadata(
+            user_id, email_window_start
+        )
         events = await ContactAggregationRepository.fetch_event_metadata(
             user_id, meeting_window_start, now
         )
@@ -112,7 +116,9 @@ class ContactAggregationService:
 
         # Process direct emails
         for email in emails:
-            primary_hash = email.from_contact_hash if email.direction == "in" else email.to_contact_hash
+            primary_hash = (
+                email.from_contact_hash if email.direction == "in" else email.to_contact_hash
+            )
             if not primary_hash:
                 continue
             contact = ensure_contact(primary_hash)
@@ -133,11 +139,7 @@ class ContactAggregationService:
             if email.is_important:
                 contact.important_count += 1
             if email.hour_of_day is not None and email.day_of_week is not None:
-                if (
-                    email.hour_of_day < 8
-                    or email.hour_of_day >= 19
-                    or email.day_of_week in (0, 6)
-                ):
+                if email.hour_of_day < 8 or email.hour_of_day >= 19 or email.day_of_week in (0, 6):
                     contact.off_hours_count += 1
 
             # Count CC involvement for other contacts
@@ -152,7 +154,9 @@ class ContactAggregationService:
             attendee_hashes = [
                 hash_value for hash_value in event.attendee_contact_hashes or [] if hash_value
             ]
-            attendee_set = {hash_value for hash_value in attendee_hashes if hash_value != user_email_hash}
+            attendee_set = {
+                hash_value for hash_value in attendee_hashes if hash_value != user_email_hash
+            }
             if not attendee_set:
                 continue
             attendee_count = len(attendee_set)
@@ -182,9 +186,7 @@ class ContactAggregationService:
 
         for contact_hash, working in contacts.items():
             thread_count = len(working.thread_ids)
-            avg_thread_depth = (
-                working.email_count / thread_count if thread_count > 0 else 0.0
-            )
+            avg_thread_depth = working.email_count / thread_count if thread_count > 0 else 0.0
             first_contact_at = (
                 min(working.timestamps) if working.timestamps else working.first_meeting_at
             )
@@ -233,21 +235,15 @@ class ContactAggregationService:
                         response_hours.append(delta_hours)
 
             reply_rate = replies / total_inbound if total_inbound > 0 else 0.0
-            median_response = (
-                statistics.median(response_hours) if response_hours else None
-            )
+            median_response = statistics.median(response_hours) if response_hours else None
             off_hours_ratio = (
-                working.off_hours_count / working.email_count
-                if working.email_count > 0
-                else 0.0
+                working.off_hours_count / working.email_count if working.email_count > 0 else 0.0
             )
             consistency_score = self._compute_consistency_score(working.timestamps)
             initiation_score = self._compute_initiation_score(
                 threads_they_started, threads_you_started
             )
-            meeting_recurrence_score = self._compute_meeting_recurrence_score(
-                working.meeting_times
-            )
+            meeting_recurrence_score = self._compute_meeting_recurrence_score(working.meeting_times)
 
             aggregate = ContactAggregate(
                 user_id=user_id,
@@ -332,7 +328,9 @@ class ContactAggregationService:
         score = 1.0 - (coefficient / 3.0)
         return max(0.0, min(1.0, score))
 
-    def _compute_initiation_score(self, threads_they_started: int, threads_you_started: int) -> float:
+    def _compute_initiation_score(
+        self, threads_they_started: int, threads_you_started: int
+    ) -> float:
         total = threads_they_started + threads_you_started
         if total == 0:
             return 0.5
@@ -349,9 +347,7 @@ class ContactAggregationService:
             return 0.0
 
         ordered = sorted(meeting_times)
-        intervals = [
-            (ordered[i + 1] - ordered[i]).days for i in range(len(ordered) - 1)
-        ]
+        intervals = [(ordered[i + 1] - ordered[i]).days for i in range(len(ordered) - 1)]
         if not intervals:
             return 0.0
 

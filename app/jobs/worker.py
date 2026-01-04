@@ -10,10 +10,10 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 
+from app.features.vip_onboarding.jobs.backfill_job import start_vip_backfill_scheduler
 from app.infrastructure.observability.logging import get_logger
 from app.jobs.oauth_cleanup_job import start_oauth_cleanup_scheduler
 from app.jobs.token_refresh_job import start_token_refresh_scheduler
-from app.jobs.vip_backfill_job import start_vip_backfill_scheduler
 
 logger = get_logger(__name__)
 
@@ -54,4 +54,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

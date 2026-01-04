@@ -2,9 +2,10 @@
 Repository helpers for VIP scoring and persistence.
 """
 
-from typing import Iterable, Sequence, TYPE_CHECKING
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING
 
-from app.db.helpers import execute_query, execute_transaction, fetch_all
+from app.db.helpers import execute_transaction, fetch_all
 from app.features.vip_onboarding.pipeline.aggregation.repository import (
     ContactAggregationRepository,
 )

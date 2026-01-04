@@ -5,9 +5,9 @@ Responsible for reading raw metadata (email/events) and writing the final
 per-contact statistics into the contacts table.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Iterable
+from datetime import datetime
 
 from app.db.helpers import execute_query, fetch_all
 from app.infrastructure.observability.logging import get_logger
@@ -85,7 +85,9 @@ class ContactAggregationRepository:
     """Raw SQL helpers for contact aggregation."""
 
     @classmethod
-    async def fetch_email_metadata(cls, user_id: str, window_start: datetime) -> list[EmailMetadataRow]:
+    async def fetch_email_metadata(
+        cls, user_id: str, window_start: datetime
+    ) -> list[EmailMetadataRow]:
         query = """
             SELECT
                 message_id,

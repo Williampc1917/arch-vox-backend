@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.auth.verify import auth_dependency
 from app.config import settings
 from app.middleware.rate_limit_dependencies import rate_limit_user
-from app.services.data_deletion_service import data_deletion_service
-from app.services.data_export_service import data_export_service
+from app.services.data_management.deletion_service import data_deletion_service
+from app.services.data_management.export_service import data_export_service
 from app.utils.audit_helpers import audit_security_event
 
 router = APIRouter(prefix="/data", tags=["Data Management (GDPR)"])

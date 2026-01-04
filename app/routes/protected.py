@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.auth.verify import auth_dependency
 from app.infrastructure.observability.logging import get_logger
 from app.models.api.user_response import AuthMeta, UserProfileResponse
-from app.services.user_service import get_user_profile
+from app.services.core.user_service import get_user_profile
 
 router = APIRouter()
 logger = get_logger(__name__)

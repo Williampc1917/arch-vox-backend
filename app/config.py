@@ -58,16 +58,16 @@ class Settings(BaseSettings):
 
     # Default rate limits (per-user, per minute)
     RATE_LIMIT_USER_PER_MINUTE: int = 1000  # Generous for development
-    RATE_LIMIT_IP_PER_MINUTE: int = 2000    # Higher for IP-based
+    RATE_LIMIT_IP_PER_MINUTE: int = 2000  # Higher for IP-based
 
     # Endpoint-specific rate limits
-    RATE_LIMIT_VIP_ENDPOINTS: int = 500      # VIP endpoints (PII access)
-    RATE_LIMIT_WRITE_ENDPOINTS: int = 300    # Write operations
-    RATE_LIMIT_READ_ENDPOINTS: int = 1000    # Read operations
+    RATE_LIMIT_VIP_ENDPOINTS: int = 500  # VIP endpoints (PII access)
+    RATE_LIMIT_WRITE_ENDPOINTS: int = 300  # Write operations
+    RATE_LIMIT_READ_ENDPOINTS: int = 1000  # Read operations
 
     # Rate limiter behavior
-    RATE_LIMIT_WINDOW_SECONDS: int = 60      # Time window (1 minute)
-    RATE_LIMIT_FAIL_OPEN: bool = True        # Allow requests if Redis fails
+    RATE_LIMIT_WINDOW_SECONDS: int = 60  # Time window (1 minute)
+    RATE_LIMIT_FAIL_OPEN: bool = True  # Allow requests if Redis fails
 
     # =================================================================
     # SECURITY SETTINGS - CORS, Headers, HTTPS
@@ -190,7 +190,7 @@ class Settings(BaseSettings):
         """
         if self.environment == "development":
             return {
-                "user_per_minute": 1000,    # Very generous
+                "user_per_minute": 1000,  # Very generous
                 "ip_per_minute": 2000,
                 "vip_endpoints": 500,
                 "write_endpoints": 300,
@@ -198,7 +198,7 @@ class Settings(BaseSettings):
             }
         elif self.environment == "production":
             return {
-                "user_per_minute": 100,     # Stricter for production
+                "user_per_minute": 100,  # Stricter for production
                 "ip_per_minute": 200,
                 "vip_endpoints": 60,
                 "write_endpoints": 30,
@@ -224,14 +224,14 @@ class Settings(BaseSettings):
         if self.environment == "development":
             # Allow all common localhost ports for development
             return [
-                "http://localhost:3000",      # React/Next.js default
-                "http://localhost:8000",      # Backend (self)
-                "http://localhost:8080",      # Alternative web port
-                "http://127.0.0.1:3000",      # IPv4 localhost
+                "http://localhost:3000",  # React/Next.js default
+                "http://localhost:8000",  # Backend (self)
+                "http://localhost:8080",  # Alternative web port
+                "http://127.0.0.1:3000",  # IPv4 localhost
                 "http://127.0.0.1:8000",
                 "http://127.0.0.1:8080",
-                "capacitor://localhost",      # iOS Capacitor (if using)
-                "ionic://localhost",          # Ionic (if using)
+                "capacitor://localhost",  # iOS Capacitor (if using)
+                "ionic://localhost",  # Ionic (if using)
             ]
         elif self.environment == "production":
             # Production: Lock down to specific domains

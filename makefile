@@ -1,4 +1,4 @@
-.PHONY: help install run test test-unit test-integration lint format build clean setup env-check \
+.PHONY: help install run test test-unit test-integration lint typecheck security check format build clean setup env-check \
 	run-vip-worker run-token-worker run-oauth-worker
 
 help:
@@ -13,6 +13,9 @@ help:
 	@echo "  make run        - Run development server"
 	@echo "  make format     - Format code"
 	@echo "  make lint       - Run linting"
+	@echo "  make typecheck  - Run mypy type checks"
+	@echo "  make security   - Run bandit security scan"
+	@echo "  make check      - Run lint + typecheck + security"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test       - Run all tests"
@@ -62,6 +65,9 @@ lint:
 	ruff check app/ tests/
 	black --check app/ tests/
 
+typecheck:
+	mypy app/
+
 build:
 	docker build -t voice-gmail-assistant .
 
@@ -71,3 +77,5 @@ clean:
 
 security:
 	bandit -r app/ tests/
+
+check: lint typecheck security

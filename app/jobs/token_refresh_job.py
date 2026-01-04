@@ -9,8 +9,8 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from app.infrastructure.observability.logging import get_logger
-from app.services.gmail_auth_service import GmailConnectionError, gmail_connection_service
-from app.services.token_service import TokenServiceError, token_service
+from app.services.core.token_service import TokenServiceError, token_service
+from app.services.gmail.auth_service import GmailConnectionError, gmail_connection_service
 
 logger = get_logger(__name__)
 

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.models.domain.user_domain import Plan, UserProfile
-from app.services.onboarding_service import (
+from app.services.core.onboarding_service import (
     OnboardingServiceError,
     skip_email_style_step,
 )
@@ -53,23 +53,23 @@ async def test_skip_email_style_step_success(monkeypatch):
     skip_flag_mock = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
-        "app.services.onboarding_service.get_user_profile",
+        "app.services.core.onboarding_service.get_user_profile",
         get_profile_mock,
     )
     monkeypatch.setattr(
-        "app.services.onboarding_service._check_calendar_permissions",
+        "app.services.core.onboarding_service._check_calendar_permissions",
         calendar_permissions_mock,
     )
     monkeypatch.setattr(
-        "app.services.onboarding_service._validate_gmail_connection",
+        "app.services.core.onboarding_service._validate_gmail_connection",
         gmail_valid_mock,
     )
     monkeypatch.setattr(
-        "app.services.onboarding_service.set_email_style_skipped",
+        "app.services.core.onboarding_service.set_email_style_skipped",
         skip_flag_mock,
     )
     monkeypatch.setattr(
-        "app.services.onboarding_service._persist_email_style_skip",
+        "app.services.core.onboarding_service._persist_email_style_skip",
         persist_skip_mock,
     )
 
@@ -88,11 +88,11 @@ async def test_skip_email_style_step_invalid_step(monkeypatch):
     profile = _build_profile(onboarding_step="gmail", onboarding_completed=False)
 
     monkeypatch.setattr(
-        "app.services.onboarding_service.get_user_profile",
+        "app.services.core.onboarding_service.get_user_profile",
         AsyncMock(return_value=profile),
     )
     monkeypatch.setattr(
-        "app.services.onboarding_service.set_email_style_skipped",
+        "app.services.core.onboarding_service.set_email_style_skipped",
         AsyncMock(return_value=False),
     )
 

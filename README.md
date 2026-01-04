@@ -138,7 +138,7 @@ This prevents illegal actions (e.g., “send” with no draft), keeps latency ti
 ##  Quick Start
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 uvicorn app.main:app --reload --port 8000
 curl -s http://127.0.0.1:8000/healthz
 ```

@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 
 from app.config import settings
 from app.db.pool import db_pool  # Import the pool manager
+from app.features.vip_onboarding.api import router as vip_router
 from app.infrastructure.observability.logging import get_logger, setup_logging
 from app.middleware import RateLimitHeadersMiddleware, RequestContextMiddleware
 from app.middleware.cors import CORSMiddleware
@@ -20,14 +21,14 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.routes import (
     calendar,
     data_management,
+    debug,
     gmail,
     gmail_auth,
     health,
     onboarding,
-    onboarding_vip,
     protected,
 )
-from app.services.redis_client import fast_redis
+from app.services.infrastructure.redis_client import fast_redis
 
 # Setup logging before creating the app
 setup_logging(log_level="INFO")
@@ -46,7 +47,6 @@ async def lifespan(app: FastAPI):
     )
 
     startup_tasks = []
-
 
     try:
         # Initialize database pool first
@@ -144,8 +144,8 @@ async def lifespan(app: FastAPI):
     # Close shared HTTP clients
     try:
         logger.info("Closing external HTTP clients")
-        from app.services.google_calendar_service import google_calendar_service
-        from app.services.google_gmail_service import google_gmail_service
+        from app.services.calendar.google_client import google_calendar_service
+        from app.services.gmail.google_client import google_gmail_service
 
         await google_gmail_service.close()
         await google_calendar_service.close()
@@ -244,16 +244,21 @@ logger.info(
 app.include_router(health.router)
 app.include_router(protected.router)
 app.include_router(onboarding.router)
-app.include_router(onboarding_vip.router)
+app.include_router(vip_router)
 app.include_router(gmail_auth.router)
 app.include_router(calendar.router)
 app.include_router(gmail.router)
 app.include_router(data_management.router)  # GDPR compliance endpoints
 
+if settings.debug or settings.environment != "production":
+    app.include_router(debug.router)
+    logger.info("Debug routes enabled", environment=settings.environment, debug=settings.debug)
+
 
 # ============================================================================
 # REQUEST LOGGING (Custom Middleware)
 # ============================================================================
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -289,6 +294,7 @@ def main() -> None:
     except ValueError:
         port = 8000
     uvicorn.run(app, host=host, port=port)
+
 
 if __name__ == "__main__":
     main()

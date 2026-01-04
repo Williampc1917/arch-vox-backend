@@ -5,12 +5,14 @@ VIP scoring service - ranks aggregated contacts and persists selections.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable
+from typing import Any
+
+from app.infrastructure.observability.logging import get_logger
 
 from .repository import VipScoringRepository
-from app.infrastructure.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -51,7 +53,10 @@ class AggregatedContact:
     @property
     def last_activity(self) -> datetime | None:
         return self.last_contact_at or self.first_contact_at
+
+
 11113
+
 
 @dataclass(slots=True)
 class ScoredContact:
@@ -68,7 +73,9 @@ class ScoringService:
     DEFAULT_LIMIT = 50
     MAX_SELECTION = 20
 
-    async def score_contacts_for_user(self, user_id: str, limit: int = DEFAULT_LIMIT, force_rescore: bool = False) -> list[ScoredContact]:
+    async def score_contacts_for_user(
+        self, user_id: str, limit: int = DEFAULT_LIMIT, force_rescore: bool = False
+    ) -> list[ScoredContact]:
         """
         Score and rank VIP contacts for a user.
 
@@ -94,10 +101,14 @@ class ScoringService:
                 return cached
 
         # No cache or force rescore - compute fresh scores
-        rows = await VipScoringRepository.fetch_contacts(user_id, limit * 2)  # fetch extra for filtering
+        rows = await VipScoringRepository.fetch_contacts(
+            user_id, limit * 2
+        )  # fetch extra for filtering
         contacts = [self._row_to_contact(user_id, row) for row in rows]
 
-        scored = [score for score in (self._score_contact(c) for c in contacts) if score is not None]
+        scored = [
+            score for score in (self._score_contact(c) for c in contacts) if score is not None
+        ]
         scored.sort(key=lambda c: c.vip_score, reverse=True)
         top = scored[:limit]
 
@@ -187,8 +198,12 @@ class ScoringService:
                 "initiation_score": contact.initiation_score,
                 "off_hours_ratio": contact.off_hours_ratio,
                 "median_response_hours": contact.median_response_hours,
-                "last_contact_at": contact.last_contact_at.isoformat() if contact.last_contact_at else None,
-                "first_contact_at": contact.first_contact_at.isoformat() if contact.first_contact_at else None,
+                "last_contact_at": (
+                    contact.last_contact_at.isoformat() if contact.last_contact_at else None
+                ),
+                "first_contact_at": (
+                    contact.first_contact_at.isoformat() if contact.first_contact_at else None
+                ),
             }
 
             # Use cached vip_score and confidence_score from database
@@ -304,8 +319,12 @@ class ScoringService:
             "initiation_score": contact.initiation_score,
             "off_hours_ratio": contact.off_hours_ratio,
             "median_response_hours": contact.median_response_hours,
-            "last_contact_at": contact.last_contact_at.isoformat() if contact.last_contact_at else None,
-            "first_contact_at": contact.first_contact_at.isoformat() if contact.first_contact_at else None,
+            "last_contact_at": (
+                contact.last_contact_at.isoformat() if contact.last_contact_at else None
+            ),
+            "first_contact_at": (
+                contact.first_contact_at.isoformat() if contact.first_contact_at else None
+            ),
         }
 
         return ScoredContact(
@@ -346,7 +365,9 @@ class ScoringService:
 
         return False, None
 
-    def _passes_gate(self, contact: AggregatedContact, scores: dict[str, float]) -> tuple[bool, str | None]:
+    def _passes_gate(
+        self, contact: AggregatedContact, scores: dict[str, float]
+    ) -> tuple[bool, str | None]:
         has_email_engagement = scores["engagement"] >= 0.1
         has_meeting_presence = contact.meeting_count_30d >= 1
         if has_email_engagement or has_meeting_presence:
@@ -443,7 +464,9 @@ class ScoringService:
         }
         return sum(weights[key] * scores.get(key, 0.0) for key in weights)
 
-    def _apply_signal_bonuses(self, contact: AggregatedContact, scores: dict[str, float], base_score: float) -> float:
+    def _apply_signal_bonuses(
+        self, contact: AggregatedContact, scores: dict[str, float], base_score: float
+    ) -> float:
         multiplier = 1.0
         if contact.meeting_count_30d >= 2 and contact.email_count_30d >= 5:
             multiplier *= 1.08
@@ -461,9 +484,15 @@ class ScoringService:
                 multiplier *= 1.04
         return base_score * multiplier
 
-    def _apply_edge_cases(self, contact: AggregatedContact, scores: dict[str, float], current: float) -> float:
+    def _apply_edge_cases(
+        self, contact: AggregatedContact, scores: dict[str, float], current: float
+    ) -> float:
         score = current
-        if scores["frequency"] < 0.2 and scores["response_time"] >= 0.75 and scores["meeting"] >= 0.25:
+        if (
+            scores["frequency"] < 0.2
+            and scores["response_time"] >= 0.75
+            and scores["meeting"] >= 0.25
+        ):
             score *= 1.2
         if contact.first_contact_at:
             days_since_first = (datetime.now(UTC) - contact.first_contact_at).days
@@ -484,7 +513,9 @@ class ScoringService:
             score *= 1.12
         return score
 
-    def _apply_penalties(self, contact: AggregatedContact, scores: dict[str, float], current: float) -> float:
+    def _apply_penalties(
+        self, contact: AggregatedContact, scores: dict[str, float], current: float
+    ) -> float:
         multiplier = 1.0
         if contact.meeting_count_30d >= 3 and contact.email_count_30d <= 3:
             multiplier *= 0.55

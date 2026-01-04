@@ -65,9 +65,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
 
             # Add X-RateLimit-Remaining header
             if "remaining" in rate_limit_info:
-                response.headers["X-RateLimit-Remaining"] = str(
-                    rate_limit_info["remaining"]
-                )
+                response.headers["X-RateLimit-Remaining"] = str(rate_limit_info["remaining"])
 
             # Add Retry-After header (if rate limited)
             if not rate_limit_info.get("allowed", True) and "retry_after" in rate_limit_info:

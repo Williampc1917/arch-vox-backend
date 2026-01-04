@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from app.config import settings
 from app.db.pool import db_pool
 from app.infrastructure.observability.logging import get_logger
-from app.services.data_deletion_service import data_deletion_service
+from app.services.data_management.deletion_service import data_deletion_service
 
 logger = get_logger(__name__)
 

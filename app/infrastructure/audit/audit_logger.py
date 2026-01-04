@@ -28,7 +28,7 @@ Design Principles:
 - Performance-optimized (async, connection pooling)
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -145,7 +145,7 @@ class AuditLogger:
                     user_agent,
                     request_id,
                     metadata,
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                 )
 
             return True
@@ -170,7 +170,7 @@ class AuditLogger:
                     "pii_fields": pii_fields,
                     "ip_address": ip_address,
                     "request_id": request_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                 },
             )
             return False

@@ -75,48 +75,34 @@ class EmailStyleSkipResponse(BaseModel):
 # UPDATED: Email Style Status Response (shows 3-profile status)
 class EmailStyleStatusResponse(BaseModel):
     """Response for GET /onboarding/email-style"""
-    
+
     current_step: str
     styles_created: dict[str, bool] = Field(
         ...,
-        description="Status of each style: {'professional': true, 'casual': false, 'friendly': true}"
+        description="Status of each style: {'professional': true, 'casual': false, 'friendly': true}",
     )
-    all_styles_complete: bool = Field(
-        ...,
-        description="True if all 3 styles exist"
-    )
-    can_advance: bool = Field(
-        ...,
-        description="True if user can complete onboarding"
-    )
+    all_styles_complete: bool = Field(..., description="True if all 3 styles exist")
+    can_advance: bool = Field(..., description="True if user can complete onboarding")
     rate_limit_info: dict[str, Any] | None = Field(
-        None,
-        description="Rate limiting information for custom style creation"
+        None, description="Rate limiting information for custom style creation"
     )
 
 
 # UPDATED: Custom Email Style Response (returns 3 profiles)
 class CustomEmailStyleResponse(BaseModel):
     """Response for POST /onboarding/email-style/custom"""
-    
+
     success: bool
     style_profiles: dict[str, Any] | None = Field(
         None,
-        description="All 3 style profiles: {'professional': {...}, 'casual': {...}, 'friendly': {...}}"
+        description="All 3 style profiles: {'professional': {...}, 'casual': {...}, 'friendly': {...}}",
     )
     extraction_grades: dict[str, str] | None = Field(
         None,
-        description="Grade for each profile: {'professional': 'A', 'casual': 'B', 'friendly': 'A'}"
+        description="Grade for each profile: {'professional': 'A', 'casual': 'B', 'friendly': 'A'}",
     )
-    error_message: str | None = Field(
-        None,
-        description="Error message if extraction failed"
-    )
+    error_message: str | None = Field(None, description="Error message if extraction failed")
     rate_limit_info: dict[str, Any] | None = Field(
-        None,
-        description="Rate limit details if blocked"
+        None, description="Rate limit details if blocked"
     )
-    next_step: str | None = Field(
-        None,
-        description="Next onboarding step (usually 'completed')"
-    )
+    next_step: str | None = Field(None, description="Next onboarding step (usually 'completed')")

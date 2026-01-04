@@ -5,8 +5,8 @@ Provides a single place for job lifecycle updates and metadata inserts so
 the scheduler/worker logic can stay slim and focus on orchestration.
 """
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Iterable
 
 from app.db.helpers import (
     DatabaseError,
@@ -99,7 +99,10 @@ class VipRepository:
             raise VipRepositoryError("Failed to create VIP backfill job", operation="create_job")
 
         logger.info(
-            "VIP backfill job created", user_id=user_id, trigger_reason=trigger_reason, attempt=next_attempt
+            "VIP backfill job created",
+            user_id=user_id,
+            trigger_reason=trigger_reason,
+            attempt=next_attempt,
         )
         return cls._row_to_job(row)
 
@@ -279,4 +282,6 @@ class VipRepository:
         ]
 
         await execute_transaction(queries)
-        logger.info("Pruned VIP metadata window", user_id=user_id, window_start=window_start.isoformat())
+        logger.info(
+            "Pruned VIP metadata window", user_id=user_id, window_start=window_start.isoformat()
+        )

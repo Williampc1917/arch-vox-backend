@@ -28,11 +28,10 @@ Usage:
 """
 
 import time
-from typing import Literal
 
 from app.config import settings
 from app.infrastructure.observability.logging import get_logger
-from app.services.redis_client import fast_redis
+from app.services.infrastructure.redis_client import fast_redis
 
 logger = get_logger(__name__)
 

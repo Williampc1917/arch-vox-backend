@@ -2,12 +2,15 @@
 Tests for health check endpoints.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.routes import health
 
+app = FastAPI()
+app.include_router(health.router)
 client = TestClient(app)
 
 
@@ -23,29 +26,23 @@ def test_healthz_endpoint():
 def test_readyz_endpoint_all_services_healthy():
     """Test readiness endpoint when all services are healthy."""
     with (
-        patch("app.routes.health.redis_ping", return_value=True),
-        patch("app.routes.health.check_db", return_value=True),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", "test-key"),
-        patch("app.routes.health.requests.get") as mock_get,
+        patch("app.routes.health.fast_redis.ping", new=AsyncMock(return_value=True)),
+        patch(
+            "app.routes.health.db_health_check",
+            new=AsyncMock(
+                return_value={
+                    "healthy": True,
+                    "pool_stats": {
+                        "pool_size": 5,
+                        "pool_available": 5,
+                        "pool_utilization_percent": 0,
+                    },
+                }
+            ),
+        ),
+        patch("app.routes.health.settings.SUPABASE_DB_URL", "postgres://test"),
+        patch("app.routes.health.settings.UPSTASH_REDIS_REST_URL", "https://redis"),
     ):
-
-        # Mock responses for both Supabase JWKS and Vapi API
-        def mock_get_side_effect(url, **kwargs):
-            mock_response = MagicMock()
-            mock_response.ok = True
-            mock_response.status_code = 200
-
-            if "jwks.json" in url:
-                # Mock Supabase JWKS response
-                mock_response.json.return_value = {"keys": [{"kid": "test-key"}]}
-            else:
-                # Mock Vapi API response
-                mock_response.json.return_value = {"assistants": []}
-
-            return mock_response
-
-        mock_get.side_effect = mock_get_side_effect
 
         response = client.get("/readyz")
 
@@ -57,26 +54,21 @@ def test_readyz_endpoint_all_services_healthy():
         # Check that all services are reported as healthy
         checks = data["checks"]
         assert checks["redis"]["ok"] is True
-        assert checks["postgres"]["ok"] is True
-        assert checks["supabase_auth"]["ok"] is True
-        assert checks["vapi"]["ok"] is True
+        assert checks["database"]["ok"] is True
+        assert checks["configuration"]["ok"] is True
 
 
 def test_readyz_endpoint_redis_unhealthy():
     """Test readiness endpoint when Redis is down."""
     with (
-        patch("app.routes.health.redis_ping", return_value=False),
-        patch("app.routes.health.check_db", return_value=True),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", "test-key"),
-        patch("app.routes.health.requests.get") as mock_get,
+        patch("app.routes.health.fast_redis.ping", new=AsyncMock(return_value=False)),
+        patch(
+            "app.routes.health.db_health_check",
+            new=AsyncMock(return_value={"healthy": True}),
+        ),
+        patch("app.routes.health.settings.SUPABASE_DB_URL", "postgres://test"),
+        patch("app.routes.health.settings.UPSTASH_REDIS_REST_URL", "https://redis"),
     ):
-
-        # Mock Vapi API response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
 
         response = client.get("/readyz")
 
@@ -90,68 +82,57 @@ def test_readyz_endpoint_redis_unhealthy():
 def test_readyz_endpoint_postgres_unhealthy():
     """Test readiness endpoint when Postgres is down."""
     with (
-        patch("app.routes.health.redis_ping", return_value=True),
-        patch("app.routes.health.check_db", return_value="Connection failed"),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", "test-key"),
-        patch("app.routes.health.requests.get") as mock_get,
+        patch("app.routes.health.fast_redis.ping", new=AsyncMock(return_value=True)),
+        patch(
+            "app.routes.health.db_health_check",
+            new=AsyncMock(
+                return_value={
+                    "healthy": False,
+                    "error": "Connection failed",
+                    "error_type": "OperationalError",
+                }
+            ),
+        ),
+        patch("app.routes.health.settings.SUPABASE_DB_URL", "postgres://test"),
+        patch("app.routes.health.settings.UPSTASH_REDIS_REST_URL", "https://redis"),
     ):
-
-        # Mock Vapi API response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
 
         response = client.get("/readyz")
 
         assert response.status_code == 200
         data = response.json()
         assert data["overall_ok"] is False
-        assert data["checks"]["postgres"]["ok"] is False
-        assert data["checks"]["postgres"]["error"] == "Connection failed"
+        assert data["checks"]["database"]["ok"] is False
+        assert data["checks"]["database"]["error"] == "Connection failed"
 
 
-def test_readyz_endpoint_missing_vapi_key():
-    """Test readiness endpoint when VAPI private key is missing."""
+def test_readyz_endpoint_missing_config():
+    """Test readiness endpoint when required config is missing."""
     with (
-        patch("app.routes.health.redis_ping", return_value=True),
-        patch("app.routes.health.check_db", return_value=True),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", None),
-        patch("app.routes.health.requests.get") as mock_get,
+        patch("app.routes.health.fast_redis.ping", new=AsyncMock(return_value=True)),
+        patch("app.routes.health.db_health_check", new=AsyncMock(return_value={"healthy": True})),
+        patch("app.routes.health.settings.SUPABASE_DB_URL", ""),
+        patch("app.routes.health.settings.UPSTASH_REDIS_REST_URL", ""),
     ):
-
-        # Mock Vapi API response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
 
         response = client.get("/readyz")
 
         assert response.status_code == 200
         data = response.json()
         assert data["overall_ok"] is False
-        assert data["checks"]["vapi"]["ok"] is False
-        assert "VAPI_PRIVATE_KEY not set" in data["checks"]["vapi"]["error"]
+        assert data["checks"]["configuration"]["ok"] is False
+        assert "SUPABASE_DB_URL not set" in data["checks"]["configuration"]["issues"]
+        assert "UPSTASH_REDIS_REST_URL not set" in data["checks"]["configuration"]["issues"]
 
 
 def test_readyz_includes_latency_metrics():
     """Test that readiness checks include latency metrics."""
     with (
-        patch("app.routes.health.redis_ping", return_value=True),
-        patch("app.routes.health.check_db", return_value=True),
-        patch("app.routes.health.settings.SUPABASE_JWT_SECRET", "test-secret"),
-        patch("app.routes.health.settings.VAPI_PRIVATE_KEY", "test-key"),
-        patch("app.routes.health.requests.get") as mock_get,
+        patch("app.routes.health.fast_redis.ping", new=AsyncMock(return_value=True)),
+        patch("app.routes.health.db_health_check", new=AsyncMock(return_value={"healthy": True})),
+        patch("app.routes.health.settings.SUPABASE_DB_URL", "postgres://test"),
+        patch("app.routes.health.settings.UPSTASH_REDIS_REST_URL", "https://redis"),
     ):
-
-        # Mock Vapi API response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
 
         response = client.get("/readyz")
 
@@ -161,8 +142,6 @@ def test_readyz_includes_latency_metrics():
         # Check that latency metrics are included
         checks = data["checks"]
         assert "latency_ms" in checks["redis"]
-        assert "latency_ms" in checks["postgres"]
-        assert "latency_ms" in checks["vapi"]
+        assert "latency_ms" in checks["database"]
         assert isinstance(checks["redis"]["latency_ms"], int | float)
-        assert isinstance(checks["postgres"]["latency_ms"], int | float)
-        assert isinstance(checks["vapi"]["latency_ms"], int | float)
+        assert isinstance(checks["database"]["latency_ms"], int | float)

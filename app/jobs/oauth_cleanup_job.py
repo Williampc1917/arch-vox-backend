@@ -12,7 +12,7 @@ import httpx
 
 from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
-from app.services.encryption_service import EncryptionError, decrypt_token
+from app.services.infrastructure.encryption_service import EncryptionError, decrypt_token
 
 logger = get_logger(__name__)
 
@@ -883,10 +883,10 @@ class OAuthCleanupJob:
 
         try:
             # Check dependent services
-            from app.services.gmail_auth_service import gmail_connection_health
-            from app.services.google_oauth_service import google_oauth_health
-            from app.services.oauth_state_service import oauth_state_health
-            from app.services.token_service import token_service_health
+            from app.services.core.token_service import token_service_health
+            from app.services.gmail.auth_service import gmail_connection_health
+            from app.services.infrastructure.google_oauth_service import google_oauth_health
+            from app.services.infrastructure.oauth_state_service import oauth_state_health
 
             services = [
                 ("oauth_state", oauth_state_health),

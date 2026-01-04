@@ -25,7 +25,7 @@ from app.models.api.gmail_response import (
     VoiceInboxSummaryResponse,
     VoiceTodayEmailsResponse,
 )
-from app.services.gmail_operations_service import (
+from app.services.gmail.operations_service import (
     GmailConnectionError,
     delete_user_message,
     get_gmail_status,

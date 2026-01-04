@@ -20,10 +20,10 @@ from app.features.vip_onboarding.repository.vip_repository import VipRepository
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
 from app.security.hashing import hash_email
-from app.services.google_calendar_service import GoogleCalendarError, google_calendar_service
-from app.services.google_gmail_service import GoogleGmailError, google_gmail_service
-from app.services.token_service import get_oauth_tokens
-from app.services.user_service import get_user_profile
+from app.services.calendar.google_client import GoogleCalendarError, google_calendar_service
+from app.services.core.token_service import get_oauth_tokens
+from app.services.core.user_service import get_user_profile
+from app.services.gmail.google_client import GoogleGmailError, google_gmail_service
 
 logger = get_logger(__name__)
 
@@ -141,7 +141,7 @@ class VipBackfillService:
                 is_important="IMPORTANT" in labels,
                 is_promotional="CATEGORY_PROMOTIONS" in labels,
                 is_social="CATEGORY_SOCIAL" in labels,
-                subject_length=len((getattr(message, "subject", "") or "")),
+                subject_length=len(getattr(message, "subject", "") or ""),
                 hour_of_day=timestamp.hour,
                 day_of_week=self._day_of_week(timestamp),
             )
@@ -201,9 +201,13 @@ class VipBackfillService:
                 end_time=end_time,
                 attendee_hashes=attendee_hashes,
                 duration_minutes=event.duration_minutes(),
-                is_recurring=bool(event.raw_data.get("recurringEventId") if event.raw_data else False),
+                is_recurring=bool(
+                    event.raw_data.get("recurringEventId") if event.raw_data else False
+                ),
                 recurrence_rule=(recurrence_list[0] if recurrence_list else None),
-                organizer_hash=hash_email(organizer.get("email")) if organizer.get("email") else None,
+                organizer_hash=(
+                    hash_email(organizer.get("email")) if organizer.get("email") else None
+                ),
                 user_is_organizer=bool(organizer.get("self")),
                 user_response=user_response,
                 is_one_on_one=self._is_one_on_one(attendee_emails),
@@ -271,7 +275,9 @@ class VipBackfillService:
 
     def _hash_cc_addresses(self, message) -> list[str]:
         cc_list = getattr(message, "cc", []) or []
-        emails = [(entry.get("email") or "").strip().lower() for entry in cc_list if entry.get("email")]
+        emails = [
+            (entry.get("email") or "").strip().lower() for entry in cc_list if entry.get("email")
+        ]
         return self._hash_unique_attendees(emails)
 
     def _is_reply(self, headers: dict) -> bool:

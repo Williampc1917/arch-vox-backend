@@ -11,7 +11,7 @@ from app.config import settings
 from app.features.vip_onboarding.domain import VipBackfillJob
 from app.features.vip_onboarding.repository.vip_repository import VipRepository
 from app.infrastructure.observability.logging import get_logger
-from app.services.redis_client import fast_redis
+from app.services.infrastructure.redis_client import fast_redis
 
 logger = get_logger(__name__)
 

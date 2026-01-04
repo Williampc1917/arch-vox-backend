@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from typing import Iterable
+from collections.abc import Iterable
 
 from app.config import settings
 

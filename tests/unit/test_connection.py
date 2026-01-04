@@ -2,12 +2,12 @@
 Tests for external service connections.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import requests
+import pytest
 
 from app.db.postgres import check_db
-from app.services.redis_store import get, ping, set_with_ttl
+from app.services.infrastructure.redis_client import fast_redis
 
 
 class TestPostgresConnection:
@@ -54,116 +54,93 @@ class TestPostgresConnection:
 
 
 class TestRedisConnection:
-    """Tests for Redis connection via Upstash REST API."""
+    """Tests for Redis connection via fast Redis client."""
 
-    @patch("requests.post")
-    def test_ping_success(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_ping_success(self):
         """Test successful Redis ping."""
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"result": "PONG"}
-        mock_post.return_value = mock_response
+        client = AsyncMock()
+        client.ping.return_value = True
 
-        result = ping()
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.ping()
 
         assert result is True
-        mock_post.assert_called_once()
+        client.ping.assert_awaited_once()
 
-        # Check that the call was made to the ping endpoint
-        args, kwargs = mock_post.call_args
-        assert args[0].endswith("/ping")
-        assert "Authorization" in kwargs["headers"]
+    @pytest.mark.asyncio
+    async def test_ping_exception(self):
+        """Test Redis ping with exception."""
+        client = AsyncMock()
+        client.ping.side_effect = Exception("Network error")
 
-    @patch("requests.post")
-    def test_ping_failure_bad_response(self, mock_post):
-        """Test Redis ping with bad HTTP response."""
-        mock_response = MagicMock()
-        mock_response.ok = False
-        mock_response.text = "ERROR"
-        mock_post.return_value = mock_response
-
-        result = ping()
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.ping()
 
         assert result is False
 
-    @patch("requests.post")
-    def test_ping_failure_no_pong(self, mock_post):
-        """Test Redis ping with successful HTTP but wrong response."""
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.text = "ERROR"
-        mock_post.return_value = mock_response
-
-        result = ping()
-
-        assert result is False
-
-    @patch("requests.post")
-    def test_ping_exception(self, mock_post):
-        """Test Redis ping with network exception."""
-        mock_post.side_effect = requests.exceptions.RequestException("Network error")
-
-        # ping() should handle exceptions gracefully and return False
-        result = ping()
-        assert result is False
-
-    @patch("requests.post")
-    def test_set_with_ttl_success(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_set_with_ttl_success(self):
         """Test Redis SET with TTL."""
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"result": "OK"}
-        mock_post.return_value = mock_response
+        client = AsyncMock()
+        client.setex.return_value = True
 
-        result = set_with_ttl("test_key", "test_value", 60)
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.set_with_ttl("test_key", "test_value", 60)
 
         assert result is True
+        client.setex.assert_awaited_once_with("test_key", 60, "test_value")
 
-        # Check that the call includes TTL parameter
-        args, kwargs = mock_post.call_args
-        assert "EX=60" in args[0]
-        assert "test_key" in args[0]
-        assert "test_value" in args[0]
-
-    @patch("requests.post")
-    def test_set_without_ttl(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_set_without_ttl(self):
         """Test Redis SET without TTL."""
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"result": "OK"}
-        mock_post.return_value = mock_response
+        client = AsyncMock()
+        client.set.return_value = True
 
-        result = set_with_ttl("test_key", "test_value")
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.set_with_ttl("test_key", "test_value")
 
         assert result is True
+        client.set.assert_awaited_once_with("test_key", "test_value")
 
-        # Check that no TTL parameter is included
-        args, kwargs = mock_post.call_args
-        assert "EX=" not in args[0]
-
-    @patch("requests.post")
-    def test_get_success(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_get_success(self):
         """Test Redis GET success."""
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.json.return_value = "test_value"
-        mock_post.return_value = mock_response
+        client = AsyncMock()
+        client.get.return_value = "test_value"
 
-        result = get("test_key")
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.get("test_key")
 
         assert result == "test_value"
+        client.get.assert_awaited_once_with("test_key")
 
-        # Check that the call was made to the get endpoint
-        args, kwargs = mock_post.call_args
-        assert "get/test_key" in args[0]
-
-    @patch("requests.post")
-    def test_get_failure(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_get_failure(self):
         """Test Redis GET failure."""
-        mock_response = MagicMock()
-        mock_response.ok = False
-        mock_post.return_value = mock_response
+        client = AsyncMock()
+        client.get.side_effect = Exception("GET failed")
 
-        result = get("test_key")
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.get("test_key")
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_success(self):
+        """Test Redis DELETE success."""
+        client = AsyncMock()
+        client.delete.return_value = 1
+
+        with patch.object(fast_redis, "_ensure_initialized", new=AsyncMock()):
+            with patch.object(fast_redis, "client", client):
+                result = await fast_redis.delete("test_key")
+
+        assert result is True
+        client.delete.assert_awaited_once_with("test_key")

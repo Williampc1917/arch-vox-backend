@@ -10,7 +10,7 @@ is stored.
 ## Current Working Flow (Happy Path)
 
 1) Gmail OAuth callback enqueues a VIP backfill job when enabled.
-   - Entry point: app/arch-vox-backend/app/routes/gmail_auth.py
+   - Entry point: app/arch-vox-backend/app/routes/gmail_auth/oauth.py
    - Trigger: settings.VIP_BACKFILL_ENABLED
 
 2) Scheduler dedupes and enqueues job ID into Redis.
@@ -51,7 +51,7 @@ is stored.
 
 High-level dependency flow:
 
-routes/gmail_auth.py
+routes/gmail_auth/oauth.py
   -> services/scheduler.enqueue_vip_backfill_job
       -> repository/vip_repository.create_job
       -> redis queue (VIP_BACKFILL_QUEUE_NAME)
@@ -110,17 +110,6 @@ api/router.py (POST /onboarding/vips/selection)
 - events_metadata
 - contacts
 - vip_list
-
-## Related Legacy Shims
-
-These exist to keep older imports stable:
-
-- app/arch-vox-backend/app/routes/onboarding_vip.py
-- app/arch-vox-backend/app/jobs/vip_backfill_job.py
-- app/arch-vox-backend/app/services/vip_backfill_service.py
-- app/arch-vox-backend/app/services/vip_backfill_scheduler.py
-- app/arch-vox-backend/app/models/domain/vip_domain.py
-- app/arch-vox-backend/app/repositories/vip_repository.py
 
 ## Notes on Current Behavior
 

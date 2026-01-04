@@ -14,7 +14,7 @@ from app.features.vip_onboarding.pipeline.aggregation import contact_aggregation
 from app.features.vip_onboarding.pipeline.scoring import scoring_service
 from app.infrastructure.observability.logging import get_logger
 from app.middleware.rate_limit_dependencies import rate_limit_user
-from app.services.onboarding_service import get_onboarding_status
+from app.services.core.onboarding_service import get_onboarding_status
 from app.utils.audit_helpers import audit_data_modification, audit_pii_access
 
 router = APIRouter(prefix="/onboarding/vips", tags=["onboarding-vips"])
@@ -263,7 +263,7 @@ async def save_vip_selection(
     )
 
     # Complete onboarding after VIP selection is saved
-    from app.services.onboarding_service import OnboardingServiceError, complete_onboarding
+    from app.services.core.onboarding_service import OnboardingServiceError, complete_onboarding
 
     try:
         profile = await complete_onboarding(user_id)

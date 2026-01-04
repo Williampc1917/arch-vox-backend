@@ -4,16 +4,22 @@ import os
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.config import settings
+
 router = APIRouter()
 VAPI_HEADER = "x-vapi-signature"  # adjust if Vapi uses a different header
-VAPI_SECRET = os.getenv("VAPI_WEBHOOK_SECRET", "dev-secret")
+VAPI_SECRET = os.getenv("VAPI_WEBHOOK_SECRET")
 
 
 def verify_vapi_hmac(raw: bytes, signature: str | None):
+    if not VAPI_SECRET:
+        if settings.environment == "production":
+            raise HTTPException(status_code=503, detail="Webhook secret not configured")
+        raise HTTPException(status_code=401, detail="Webhook secret missing for verification")
     if not signature:
         raise HTTPException(status_code=401, detail="Missing signature")
     mac = hmac.new(VAPI_SECRET.encode(), raw, hashlib.sha256).hexdigest()
-    if mac != signature:
+    if not hmac.compare_digest(mac, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
 

@@ -35,7 +35,7 @@ from app.models.api.user_response import (
     OnboardingProfileUpdateResponse,
     OnboardingStatusResponse,
 )
-from app.services.onboarding_service import (
+from app.services.core.onboarding_service import (
     OnboardingServiceError,
     complete_onboarding,
     get_onboarding_status,
@@ -100,12 +100,12 @@ async def update_profile(
 ):
     """
     Update user profile during onboarding.
-    
+
     Args:
         request: Profile update data (display_name)
         request_obj: FastAPI request object for headers
         claims: JWT claims from auth
-    
+
     Returns:
         OnboardingProfileUpdateResponse: Success status and next step
     """
@@ -142,7 +142,7 @@ async def get_email_style_status(claims: dict = Depends(auth_dependency)):
 
     Returns:
         EmailStyleStatusResponse: Status of all 3 profiles (professional, casual, friendly)
-    
+
     Raises:
         401: Invalid authentication token
         400: User not on email_style step
@@ -154,7 +154,7 @@ async def get_email_style_status(claims: dict = Depends(auth_dependency)):
         )
 
     # Get email style step status from onboarding service
-    from app.services.onboarding_service import get_email_style_step_status
+    from app.services.core.onboarding_service import get_email_style_step_status
 
     step_status = await get_email_style_step_status(user_id)
 
@@ -196,7 +196,7 @@ async def create_custom_email_style(
 
     Returns:
         CustomEmailStyleResponse: 3 style profiles with grades
-    
+
     Raises:
         401: Invalid authentication token
         500: Style creation failed
@@ -216,7 +216,7 @@ async def create_custom_email_style(
         }
 
         # Create 3 custom styles (includes rate limiting + OpenAI)
-        from app.services.email_style_service import create_custom_email_style
+        from app.services.email_style.service import create_custom_email_style
 
         result = await create_custom_email_style(user_id, labeled_emails)
 
@@ -257,7 +257,7 @@ async def create_custom_email_style(
             return response
 
         # Success - complete email style selection and advance to vip_selection
-        from app.services.onboarding_service import (
+        from app.services.core.onboarding_service import (
             advance_to_vip_selection_step,
             complete_email_style_selection,
         )
@@ -358,7 +358,9 @@ async def skip_email_style(claims: dict = Depends(auth_dependency)):
             recoverable=e.recoverable,
         )
         status_code = (
-            status.HTTP_400_BAD_REQUEST if getattr(e, "recoverable", True) else status.HTTP_500_INTERNAL_SERVER_ERROR
+            status.HTTP_400_BAD_REQUEST
+            if getattr(e, "recoverable", True)
+            else status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:

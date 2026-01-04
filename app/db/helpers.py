@@ -361,7 +361,7 @@ async def increment_extraction_counter(user_id: str) -> bool:
 async def store_email_style_preferences(user_id: str, preferences: dict[str, Any]) -> bool:
     """
     Store user's 3 email style profiles in user_settings table.
-    
+
     Expected preferences structure:
     {
         "styles": {
@@ -402,9 +402,7 @@ async def store_email_style_preferences(user_id: str, preferences: dict[str, Any
         styles = preferences.get("styles", {})
         for style_type in required_styles:
             if style_type not in styles:
-                logger.error(
-                    f"Missing {style_type} style in preferences", user_id=user_id
-                )
+                logger.error(f"Missing {style_type} style in preferences", user_id=user_id)
                 return False
 
         # Add metadata if missing

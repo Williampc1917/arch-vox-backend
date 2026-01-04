@@ -10,4 +10,3 @@ __all__ = [
     "vip_backfill_service",
     "enqueue_vip_backfill_job",
 ]
-

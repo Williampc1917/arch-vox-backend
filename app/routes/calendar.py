@@ -24,7 +24,7 @@ from app.models.api.calendar_response import (
     CreateEventResponse,
     EventsListResponse,
 )
-from app.services.calendar_operations_service import (
+from app.services.calendar.operations_service import (
     CalendarConnectionError,
     calendar_connection_health,
     check_user_availability,

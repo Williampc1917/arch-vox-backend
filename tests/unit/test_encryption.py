@@ -2,7 +2,11 @@
 Test encryption service functionality.
 """
 
-from app.services.encryption_service import decrypt_token, encrypt_token, validate_encryption_config
+from app.services.infrastructure.encryption_service import (
+    decrypt_token,
+    encrypt_token,
+    validate_encryption_config,
+)
 
 
 def test_basic_encryption_decryption():
