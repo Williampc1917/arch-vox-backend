@@ -912,7 +912,7 @@ class GmailConnectionService:
             try:
                 from app.services.google_gmail_service import google_gmail_health
 
-                gmail_health = google_gmail_health()
+                gmail_health = await google_gmail_health()
                 health_data["gmail_api_connectivity"] = (
                     "ok" if gmail_health.get("healthy", False) else "error"
                 )

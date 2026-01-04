@@ -8,7 +8,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
-import requests
+import httpx
 
 from app.db.helpers import DatabaseError, execute_query, fetch_all, fetch_one, with_db_retry
 from app.infrastructure.observability.logging import get_logger
@@ -314,14 +314,15 @@ class OAuthCleanupJob:
             cleaned_count = 0
             headers = {"Authorization": f"Bearer {self.redis_token}"}
 
-            for pattern in test_key_patterns:
-                try:
-                    url = f"{self.redis_url}/del/{quote(pattern)}"
-                    response = requests.post(url, headers=headers, timeout=5)
-                    if response.ok:
-                        cleaned_count += 1
-                except Exception as e:
-                    logger.debug(f"Error cleaning Redis key {pattern}: {e}")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for pattern in test_key_patterns:
+                    try:
+                        url = f"{self.redis_url}/del/{quote(pattern)}"
+                        response = await client.post(url, headers=headers)
+                        if response.is_success:
+                            cleaned_count += 1
+                    except httpx.RequestError as e:
+                        logger.debug(f"Error cleaning Redis key {pattern}: {e}")
 
             return cleaned_count
 

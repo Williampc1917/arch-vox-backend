@@ -668,7 +668,7 @@ class CalendarConnectionService:
             try:
                 from app.services.google_calendar_service import google_calendar_health
 
-                calendar_health = google_calendar_health()  # Remove await since it's not async
+                calendar_health = await google_calendar_health()
                 health_data["calendar_api_connectivity"] = (
                     "ok" if calendar_health.get("healthy", False) else "error"
                 )

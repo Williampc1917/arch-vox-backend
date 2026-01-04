@@ -6,15 +6,13 @@ Low-level Gmail API client
 /services/google_gmail_service.py
 """
 
+import asyncio
 import base64
-import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import httpx
 
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.gmail_domain import GmailLabel, GmailMessage, GmailThread
@@ -29,6 +27,7 @@ GMAIL_USER_ID = "me"  # User's Gmail account
 REQUEST_TIMEOUT = 30  # seconds (email operations can be slower)
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 2
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class GoogleGmailError(Exception):
@@ -56,24 +55,46 @@ class GoogleGmailService:
     """
 
     def __init__(self):
-        self._session = self._create_session()
+        self._client = self._create_client()
 
-    def _create_session(self) -> requests.Session:
-        """Create requests session with retry strategy for Gmail API."""
-        session = requests.Session()
+    def _create_client(self) -> httpx.AsyncClient:
+        """Create async HTTP client for Gmail API."""
+        timeout = httpx.Timeout(REQUEST_TIMEOUT)
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+        return httpx.AsyncClient(timeout=timeout, limits=limits)
 
-        # Configure retry strategy for Gmail API
-        retry_strategy = Retry(
-            total=MAX_RETRIES,
-            backoff_factor=BACKOFF_FACTOR,
-            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
-            allowed_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],  # Gmail operations
-        )
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
 
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-
-        return session
+    async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Execute an HTTP request with retry and backoff."""
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await self._client.request(method, url, **kwargs)
+                if response.status_code in RETRY_STATUS_CODES and attempt < MAX_RETRIES:
+                    backoff = BACKOFF_FACTOR * (2 ** (attempt - 1))
+                    logger.debug(
+                        "Gmail API retrying request",
+                        attempt=attempt,
+                        status_code=response.status_code,
+                        backoff_seconds=backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                return response
+            except httpx.RequestError as e:
+                if attempt >= MAX_RETRIES:
+                    raise
+                backoff = BACKOFF_FACTOR * (2 ** (attempt - 1))
+                logger.debug(
+                    "Gmail API request error, retrying",
+                    attempt=attempt,
+                    error=str(e),
+                    backoff_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+        raise RuntimeError("Gmail API retry loop exhausted")
 
     def _get_auth_headers(self, access_token: str) -> dict:
         """Get authorization headers for Gmail API requests."""
@@ -83,7 +104,7 @@ class GoogleGmailService:
             "Accept": "application/json",
         }
 
-    def _handle_api_response(self, response: requests.Response, operation: str) -> dict:
+    def _handle_api_response(self, response: httpx.Response, operation: str) -> dict:
         """
         Handle and validate Gmail API response.
 
@@ -104,7 +125,7 @@ class GoogleGmailService:
         )
 
         # Handle successful responses
-        if response.ok:
+        if response.is_success:
             try:
                 return response.json() if response.text else {}
             except ValueError as e:
@@ -213,8 +234,8 @@ class GoogleGmailService:
                 query=query,
             )
 
-            response = self._session.get(
-                url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "GET", url, headers=headers, params=params
             )
             data = self._handle_api_response(response, "list_messages")
 
@@ -273,8 +294,8 @@ class GoogleGmailService:
 
             logger.info("Getting Gmail message", message_id=message_id, format=format)
 
-            response = self._session.get(
-                url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "GET", url, headers=headers, params=params
             )
             data = self._handle_api_response(response, "get_message")
 
@@ -313,8 +334,8 @@ class GoogleGmailService:
 
             logger.info("Getting Gmail thread", thread_id=thread_id, format=format)
 
-            response = self._session.get(
-                url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "GET", url, headers=headers, params=params
             )
             data = self._handle_api_response(response, "get_thread")
 
@@ -393,8 +414,8 @@ class GoogleGmailService:
                 is_reply=bool(thread_id),
             )
 
-            response = self._session.post(
-                url, headers=headers, data=json.dumps(send_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "POST", url, headers=headers, json=send_data
             )
             data = self._handle_api_response(response, "send_message")
 
@@ -446,8 +467,8 @@ class GoogleGmailService:
                 remove_labels=remove_label_ids,
             )
 
-            response = self._session.post(
-                url, headers=headers, data=json.dumps(modify_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "POST", url, headers=headers, json=modify_data
             )
             data = self._handle_api_response(response, "modify_message")
 
@@ -482,7 +503,7 @@ class GoogleGmailService:
 
             logger.info("Deleting Gmail message", message_id=message_id)
 
-            response = self._session.post(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("POST", url, headers=headers)
             self._handle_api_response(response, "delete_message")
 
             logger.info("Message deleted successfully", message_id=message_id)
@@ -513,7 +534,7 @@ class GoogleGmailService:
 
             logger.info("Getting Gmail labels")
 
-            response = self._session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("GET", url, headers=headers)
             data = self._handle_api_response(response, "get_labels")
 
             # Create domain models from API response
@@ -580,8 +601,8 @@ class GoogleGmailService:
 
             logger.info("Creating Gmail draft", to=to, subject=subject)
 
-            response = self._session.post(
-                url, headers=headers, data=json.dumps(draft_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "POST", url, headers=headers, json=draft_data
             )
             data = self._handle_api_response(response, "create_draft")
 
@@ -594,7 +615,7 @@ class GoogleGmailService:
             logger.error("Unexpected error creating draft", error=str(e))
             raise GoogleGmailError(f"Failed to create draft: {e}") from e
 
-    def health_check(self) -> dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """
         Check Google Gmail service health.
 
@@ -623,13 +644,15 @@ class GoogleGmailService:
             # Test basic connectivity to Google Gmail API
             try:
                 # Simple HEAD request to check API availability
-                response = requests.head(GMAIL_API_BASE_URL, timeout=5)
+                response = await self._request_with_retry(
+                    "HEAD", GMAIL_API_BASE_URL, timeout=5.0
+                )
                 health_data["api_connectivity"] = (
                     "ok"
                     if response.status_code in [200, 401, 403]
                     else f"error_{response.status_code}"
                 )
-            except requests.exceptions.RequestException as e:
+            except httpx.RequestError as e:
                 health_data["api_connectivity"] = f"error_{type(e).__name__}"
                 health_data["healthy"] = False
 
@@ -714,6 +737,6 @@ async def get_gmail_labels(access_token: str) -> list[GmailLabel]:
     return await google_gmail_service.get_labels(access_token)
 
 
-def google_gmail_health() -> dict[str, Any]:
+async def google_gmail_health() -> dict[str, Any]:
     """Check Google Gmail service health."""
-    return google_gmail_service.health_check()
+    return await google_gmail_service.health_check()

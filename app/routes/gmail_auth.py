@@ -3,6 +3,8 @@ Gmail Authentication Routes
 HTTP endpoints for OAuth flow management and Gmail connection handling.
 """
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 
@@ -31,6 +33,21 @@ from app.services.gmail_auth_service import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth/gmail", tags=["gmail-auth"])
+
+_CALLBACK_HTML_PATH = Path(__file__).resolve().parent.parent / "static" / "oauth_callback.html"
+
+
+def _load_oauth_callback_html() -> str:
+    """Load the static OAuth callback HTML page."""
+    try:
+        return _CALLBACK_HTML_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return (
+            "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>"
+            "<title>Gmail Connection</title></head>"
+            "<body style=\"font-family:sans-serif;text-align:center;padding:40px;\">"
+            "<h2>Gmail connection complete</h2><p>Return to the app to continue.</p></body></html>"
+        )
 
 
 @router.get("/url", response_model=GmailAuthURLResponse)
@@ -565,59 +582,6 @@ def gmail_auth_health():
         }
 
 
-# Additional utility endpoint for debugging (remove in production)
-@router.get("/debug/connection-metrics")
-async def get_connection_metrics(claims: dict = Depends(auth_dependency)):
-    """
-    Get Gmail connection metrics for debugging and monitoring.
-
-    This endpoint provides detailed metrics about Gmail connections
-    across all users. Should be removed or restricted in production.
-
-    Returns:
-        dict: Connection metrics and statistics
-
-    Raises:
-        401: Invalid authentication token
-        500: Metrics retrieval failed
-    """
-    user_id = claims.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token: missing user ID"
-        )
-
-    try:
-        from app.services.gmail_auth_service import gmail_connection_service
-
-        metrics = gmail_connection_service.get_connection_metrics()
-
-        logger.info("Gmail connection metrics requested", user_id=user_id)
-
-        return {
-            "service": "gmail_auth_metrics",
-            "timestamp": metrics.get("timestamp"),
-            "metrics": metrics,
-        }
-
-    except Exception as e:
-        logger.error("Error getting Gmail connection metrics", user_id=user_id, error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve connection metrics",
-        ) from None
-
-    # Add this NEW endpoint ABOVE your existing POST /callback endpoint
-
-
-# FIXED GET callback endpoint - replace in app/routes/gmail_auth.py
-
-# TEMPORARY DEBUG VERSION of the GET callback endpoint
-# Replace this in app/routes/gmail_auth.py to debug Redis issue
-
-# Production version - replace the debug GET callback in app/routes/gmail_auth.py
-
-
 @router.get("/callback")
 async def oauth_callback_redirect(
     code: str = Query(..., description="Authorization code from Google"),
@@ -631,28 +595,7 @@ async def oauth_callback_redirect(
             "OAuth callback received error", error=error, state_preview=state[:8] + "..."
         )
 
-        return HTMLResponse(
-            content=f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Gmail Connection Failed</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        </head>
-        <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #f5f5f7;">
-            <div style="max-width: 400px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px;">
-                <h2 style="color: #ff3b30;">Gmail Connection Failed</h2>
-                <p>Error: {error}</p>
-                <p>Please return to your app and try connecting Gmail again.</p>
-                <button onclick="window.close()" style="background: #007AFF; color: white; padding: 12px 24px; border-radius: 8px; border: none;">
-                    Close Window
-                </button>
-            </div>
-        </body>
-        </html>
-        """,
-            status_code=400,
-        )
+        return HTMLResponse(content=_load_oauth_callback_html(), status_code=400)
 
     try:
         logger.info(
@@ -690,62 +633,7 @@ async def oauth_callback_redirect(
             redis_key_preview=redis_key[:30] + "...",
         )
 
-        return HTMLResponse(
-            content="""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Gmail Connected Successfully!</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                    margin: 0; padding: 40px; background: #f5f5f7; text-align: center;
-                }
-                .container {
-                    max-width: 400px; margin: 0 auto; background: white;
-                    padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                }
-                .success { color: #34c759; margin: 20px 0; }
-                .button {
-                    background: #007AFF; color: white; padding: 12px 24px;
-                    border-radius: 8px; border: none; cursor: pointer;
-                }
-                .highlight { background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h2 class="success">✅ Gmail Connected Successfully!</h2>
-                <div class="highlight">
-                    <p><strong>Please return to your mobile app to continue.</strong></p>
-                    <p>Your Gmail connection is being processed...</p>
-                </div>
-
-                <button class="button" onclick="window.close()">Close Window</button>
-
-                <div style="margin-top: 30px; font-size: 14px; color: #8e8e93;">
-                    <p>This window will close automatically in <span id="countdown">10</span> seconds.</p>
-                </div>
-            </div>
-            <script>
-                let countdown = 10;
-                const countdownEl = document.getElementById('countdown');
-
-                const timer = setInterval(() => {
-                    countdown--;
-                    countdownEl.textContent = countdown;
-
-                    if (countdown <= 0) {
-                        clearInterval(timer);
-                        window.close();
-                    }
-                }, 1000);
-            </script>
-        </body>
-        </html>
-        """
-        )
+        return HTMLResponse(content=_load_oauth_callback_html())
 
     except Exception as e:
         logger.error(
@@ -756,23 +644,7 @@ async def oauth_callback_redirect(
             error_type=type(e).__name__,
         )
 
-        return HTMLResponse(
-            content="""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Connection Error</title></head>
-        <body style="font-family: sans-serif; text-align: center; padding: 40px;">
-            <h2 style="color: #ff3b30;">⚠️ Connection Error</h2>
-            <p>An error occurred while processing your Gmail connection.</p>
-            <p><strong>Please return to your app and try again.</strong></p>
-            <button onclick="window.close()" style="background: #007AFF; color: white; padding: 12px 24px; border-radius: 8px; border: none;">
-                Close Window
-            </button>
-        </body>
-        </html>
-        """,
-            status_code=500,
-        )
+        return HTMLResponse(content=_load_oauth_callback_html(), status_code=500)
 
 
 # FIXED retrieve endpoint with fast Redis

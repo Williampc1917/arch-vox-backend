@@ -5,13 +5,11 @@ UPDATED: Now uses domain models from app.models.domain.calendar_domain
 Low-level Calendar API client
 """
 
-import json
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import httpx
 
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.calendar_domain import CalendarEvent, CalendarInfo
@@ -26,6 +24,7 @@ CALENDAR_PRIMARY = "primary"  # User's primary calendar
 REQUEST_TIMEOUT = 30  # seconds (calendar operations can be slower)
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 2
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class GoogleCalendarError(Exception):
@@ -53,24 +52,46 @@ class GoogleCalendarService:
     """
 
     def __init__(self):
-        self._session = self._create_session()
+        self._client = self._create_client()
 
-    def _create_session(self) -> requests.Session:
-        """Create requests session with retry strategy for Calendar API."""
-        session = requests.Session()
+    def _create_client(self) -> httpx.AsyncClient:
+        """Create async HTTP client for Calendar API."""
+        timeout = httpx.Timeout(REQUEST_TIMEOUT)
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+        return httpx.AsyncClient(timeout=timeout, limits=limits)
 
-        # Configure retry strategy for Calendar API
-        retry_strategy = Retry(
-            total=MAX_RETRIES,
-            backoff_factor=BACKOFF_FACTOR,
-            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
-            allowed_methods=["GET", "POST", "PUT", "PATCH"],  # Calendar operations
-        )
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
 
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-
-        return session
+    async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Execute an HTTP request with retry and backoff."""
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await self._client.request(method, url, **kwargs)
+                if response.status_code in RETRY_STATUS_CODES and attempt < MAX_RETRIES:
+                    backoff = BACKOFF_FACTOR * (2 ** (attempt - 1))
+                    logger.debug(
+                        "Calendar API retrying request",
+                        attempt=attempt,
+                        status_code=response.status_code,
+                        backoff_seconds=backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                return response
+            except httpx.RequestError as e:
+                if attempt >= MAX_RETRIES:
+                    raise
+                backoff = BACKOFF_FACTOR * (2 ** (attempt - 1))
+                logger.debug(
+                    "Calendar API request error, retrying",
+                    attempt=attempt,
+                    error=str(e),
+                    backoff_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+        raise RuntimeError("Calendar API retry loop exhausted")
 
     def _get_auth_headers(self, access_token: str) -> dict:
         """Get authorization headers for Calendar API requests."""
@@ -80,7 +101,7 @@ class GoogleCalendarService:
             "Accept": "application/json",
         }
 
-    def _handle_api_response(self, response: requests.Response, operation: str) -> dict:
+    def _handle_api_response(self, response: httpx.Response, operation: str) -> dict:
         """
         Handle and validate Calendar API response.
 
@@ -101,7 +122,7 @@ class GoogleCalendarService:
         )
 
         # Handle successful responses
-        if response.ok:
+        if response.is_success:
             try:
                 return response.json() if response.text else {}
             except ValueError as e:
@@ -177,7 +198,7 @@ class GoogleCalendarService:
 
             logger.info("Listing user calendars")
 
-            response = self._session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("GET", url, headers=headers)
             data = self._handle_api_response(response, "list_calendars")
 
             # Convert to domain models
@@ -217,7 +238,7 @@ class GoogleCalendarService:
 
             logger.info("Getting calendar info", calendar_id=calendar_id)
 
-            response = self._session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("GET", url, headers=headers)
             data = self._handle_api_response(response, "get_calendar")
 
             calendar_info = CalendarInfo(data)
@@ -284,8 +305,8 @@ class GoogleCalendarService:
                 max_results=max_results,
             )
 
-            response = self._session.get(
-                url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "GET", url, headers=headers, params=params
             )
             data = self._handle_api_response(response, "list_events")
 
@@ -331,7 +352,7 @@ class GoogleCalendarService:
 
             logger.info("Getting calendar event", event_id=event_id, calendar_id=calendar_id)
 
-            response = self._session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("GET", url, headers=headers)
             data = self._handle_api_response(response, "get_event")
 
             event = CalendarEvent(data)
@@ -405,8 +426,8 @@ class GoogleCalendarService:
                 calendar_id=calendar_id,
             )
 
-            response = self._session.post(
-                url, headers=headers, data=json.dumps(event_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "POST", url, headers=headers, json=event_data
             )
             data = self._handle_api_response(response, "create_event")
 
@@ -488,8 +509,8 @@ class GoogleCalendarService:
                 fields_updated=list(update_data.keys()),
             )
 
-            response = self._session.patch(
-                url, headers=headers, data=json.dumps(update_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "PATCH", url, headers=headers, json=update_data
             )
             data = self._handle_api_response(response, "update_event")
 
@@ -526,7 +547,7 @@ class GoogleCalendarService:
 
             logger.info("Deleting calendar event", event_id=event_id, calendar_id=calendar_id)
 
-            response = self._session.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = await self._request_with_retry("DELETE", url, headers=headers)
 
             # For DELETE operations, success is typically 204 No Content
             if response.status_code == 204:
@@ -585,8 +606,8 @@ class GoogleCalendarService:
                 calendar_count=len(calendar_ids),
             )
 
-            response = self._session.post(
-                url, headers=headers, data=json.dumps(query_data), timeout=REQUEST_TIMEOUT
+            response = await self._request_with_retry(
+                "POST", url, headers=headers, json=query_data
             )
             data = self._handle_api_response(response, "check_availability")
 
@@ -634,7 +655,7 @@ class GoogleCalendarService:
             logger.error("Unexpected error checking availability", error=str(e))
             raise GoogleCalendarError(f"Failed to check availability: {e}") from e
 
-    def health_check(self) -> dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """
         Check Google Calendar service health.
 
@@ -663,13 +684,15 @@ class GoogleCalendarService:
             # Test basic connectivity to Google Calendar API
             try:
                 # Simple HEAD request to check API availability
-                response = requests.head(CALENDAR_API_BASE_URL, timeout=5)
+                response = await self._request_with_retry(
+                    "HEAD", CALENDAR_API_BASE_URL, timeout=5.0
+                )
                 health_data["api_connectivity"] = (
                     "ok"
                     if response.status_code in [200, 401, 403]
                     else f"error_{response.status_code}"
                 )
-            except requests.exceptions.RequestException as e:
+            except httpx.RequestError as e:
                 health_data["api_connectivity"] = f"error_{type(e).__name__}"
                 health_data["healthy"] = False
 
@@ -742,6 +765,6 @@ async def check_calendar_availability(
     )
 
 
-def google_calendar_health() -> dict[str, Any]:
+async def google_calendar_health() -> dict[str, Any]:
     """Check Google Calendar service health."""
-    return google_calendar_service.health_check()
+    return await google_calendar_service.health_check()

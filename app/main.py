@@ -141,6 +141,18 @@ async def lifespan(app: FastAPI):
         logger.error("Error closing Redis", error=str(e))
         shutdown_errors.append(f"Redis: {e}")
 
+    # Close shared HTTP clients
+    try:
+        logger.info("Closing external HTTP clients")
+        from app.services.google_calendar_service import google_calendar_service
+        from app.services.google_gmail_service import google_gmail_service
+
+        await google_gmail_service.close()
+        await google_calendar_service.close()
+    except Exception as e:
+        logger.error("Error closing HTTP clients", error=str(e))
+        shutdown_errors.append(f"HTTP clients: {e}")
+
     # Close database pool last (may have active connections)
     try:
         logger.info("Closing database pool")
