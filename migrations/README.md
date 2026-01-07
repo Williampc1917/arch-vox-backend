@@ -24,6 +24,8 @@ psql $PROD_DB_URL -f migrations/001_create_audit_logs.sql
 ## Migration Files
 
 - `001_create_audit_logs.sql` - Creates audit_logs table for PII access tracking (Gmail API compliance)
+- `002_create_contact_identities.sql` - Creates contact_identities table for encrypted emails/display names
+- `003_add_contact_domain_shared_inbox.sql` - Adds contacts.email_domain + contacts.is_shared_inbox
 
 ## Migration Checklist
 

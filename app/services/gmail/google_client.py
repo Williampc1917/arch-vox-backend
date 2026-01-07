@@ -190,7 +190,8 @@ class GoogleGmailService:
         query: str | None = None,
         include_spam_trash: bool = False,
         page_token: str | None = None,
-    ) -> tuple[list[GmailMessage], int]:
+        message_format: str = "full",
+    ) -> tuple[list[GmailMessage], int, str | None]:
         """
         List messages from user's Gmail.
 
@@ -201,9 +202,10 @@ class GoogleGmailService:
             query: Gmail search query (e.g., "is:unread subject:meeting")
             include_spam_trash: Whether to include spam and trash
             page_token: Token for pagination
+            message_format: Message format for individual fetch ("full", "metadata", etc.)
 
         Returns:
-            Tuple[list[GmailMessage], int]: (List of Gmail messages, Total count)
+            Tuple[list[GmailMessage], int, str | None]: (Messages, Total count, next page token)
 
         Raises:
             GoogleGmailError: If listing messages fails
@@ -237,21 +239,24 @@ class GoogleGmailService:
             response = await self._request_with_retry("GET", url, headers=headers, params=params)
             data = self._handle_api_response(response, "list_messages")
 
-            # Get total count from resultSizeEstimate
+            # Get total count and pagination token
             total_count = data.get("resultSizeEstimate", 0)
+            next_page_token = data.get("nextPageToken")
 
             # Get message IDs and fetch full message details
             message_ids = [msg["id"] for msg in data.get("messages", [])]
 
             if not message_ids:
                 logger.info("No messages found")
-                return [], total_count
+                return [], total_count, next_page_token
 
             # Fetch full message details (could be optimized with batch requests)
             messages = []
             for msg_id in message_ids:
                 try:
-                    message = await self.get_message(access_token, msg_id)
+                    message = await self.get_message(
+                        access_token, msg_id, format=message_format
+                    )
                     messages.append(message)
                 except GoogleGmailError as e:
                     logger.warning(f"Failed to get message {msg_id}", error=str(e))
@@ -260,7 +265,7 @@ class GoogleGmailService:
             logger.info(
                 "Messages listed successfully", message_count=len(messages), total_count=total_count
             )
-            return messages, total_count
+            return messages, total_count, next_page_token
 
         except GoogleGmailError:
             raise
@@ -665,7 +670,7 @@ async def list_user_messages(
     max_results: int = 10,
     label_ids: list[str] | None = None,
     query: str | None = None,
-) -> tuple[list[GmailMessage], int]:
+) -> tuple[list[GmailMessage], int, str | None]:
     """List messages for user."""
     return await google_gmail_service.list_messages(access_token, max_results, label_ids, query)
 

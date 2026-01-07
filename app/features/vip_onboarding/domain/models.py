@@ -34,6 +34,16 @@ class EmailMetadataRecord:
 
 
 @dataclass(slots=True)
+class ContactIdentityRecord:
+    """Represents encrypted identity info for a contact hash."""
+
+    user_id: str
+    contact_hash: str
+    email_encrypted: bytes
+    display_name_encrypted: bytes | None
+
+
+@dataclass(slots=True)
 class CalendarEventRecord:
     """Represents a calendar event attendee list used for VIP scoring."""
 

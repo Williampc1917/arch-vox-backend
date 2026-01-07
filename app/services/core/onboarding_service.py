@@ -370,6 +370,77 @@ async def skip_email_style_step(user_id: str) -> UserProfile | None:
         ) from e
 
 
+async def skip_vip_onboarding(user_id: str) -> UserProfile | None:
+    """
+    Allow user to skip VIP selection and complete onboarding.
+    """
+    try:
+        profile = await get_user_profile(user_id)
+        if not profile:
+            logger.warning("VIP skip failed - user not found", user_id=user_id)
+            raise OnboardingServiceError("User not found", user_id=user_id)
+
+        # Idempotent: if already completed and skipped, return profile
+        if profile.onboarding_step == "completed" and profile.onboarding_completed:
+            if not profile.vip_onboarding_skipped:
+                logger.warning(
+                    "VIP skip ignored - onboarding already completed without skip",
+                    user_id=user_id,
+                )
+                raise OnboardingServiceError(
+                    "Onboarding already completed without skip", user_id=user_id
+                )
+            return profile
+
+        if profile.onboarding_step != "vip_selection":
+            logger.warning(
+                "VIP skip failed - invalid step",
+                user_id=user_id,
+                current_step=profile.onboarding_step,
+            )
+            raise OnboardingServiceError(
+                f"Cannot skip from '{profile.onboarding_step}' step", user_id=user_id
+            )
+
+        if not profile.gmail_connected:
+            logger.warning("VIP skip failed - Gmail not connected", user_id=user_id)
+            raise OnboardingServiceError("Gmail not connected", user_id=user_id)
+
+        gmail_connection_valid = await _validate_gmail_connection(user_id)
+        if not gmail_connection_valid:
+            logger.warning(
+                "VIP skip failed - Gmail connection invalid",
+                user_id=user_id,
+            )
+            await _fix_gmail_connection_state(user_id)
+            raise OnboardingServiceError("Gmail connection invalid", user_id=user_id)
+
+        affected_rows = await _persist_vip_skip(user_id)
+        if affected_rows == 0:
+            logger.error(
+                "VIP skip failed - database update returned 0 rows",
+                user_id=user_id,
+            )
+            raise OnboardingServiceError("Failed to skip VIP selection", user_id=user_id)
+
+        logger.info(
+            "VIP selection skipped - onboarding completed",
+            user_id=user_id,
+            step_transition="vip_selection → completed",
+            gmail_connected=True,
+        )
+
+        return await get_user_profile(user_id)
+
+    except OnboardingServiceError:
+        raise
+    except Exception as e:
+        logger.error("Unexpected error skipping VIP selection", user_id=user_id, error=str(e))
+        raise OnboardingServiceError(
+            f"Failed to skip VIP selection: {e}", user_id=user_id
+        ) from e
+
+
 @with_db_retry(max_retries=3, base_delay=0.1)
 async def _persist_email_style_skip(user_id: str) -> int:
     """Advance to vip_selection when skipping email styles."""
@@ -381,6 +452,27 @@ async def _persist_email_style_skip(user_id: str) -> int:
     WHERE
         id = %s
         AND onboarding_step = 'email_style'
+        AND is_active = true
+    """
+
+    return await execute_query(query, (user_id,))
+
+
+@with_db_retry(max_retries=3, base_delay=0.1)
+async def _persist_vip_skip(user_id: str) -> int:
+    """Mark VIP onboarding skipped and complete onboarding."""
+    query = """
+    UPDATE users
+    SET
+        onboarding_completed = true,
+        onboarding_step = 'completed',
+        vip_onboarding_skipped = true,
+        vip_acquisition_status = 'pending',
+        vip_last_attempt_at = NOW(),
+        updated_at = NOW()
+    WHERE
+        id = %s
+        AND onboarding_step = 'vip_selection'
         AND is_active = true
     """
 
@@ -566,6 +658,28 @@ async def get_onboarding_completion_requirements(user_id: str) -> dict:
         profile = await get_user_profile(user_id)
         if not profile:
             return {"can_complete": False, "reason": "User not found", "requirements": {}}
+
+        if profile.vip_onboarding_skipped and profile.onboarding_completed:
+            logger.info(
+                "Completion requirements satisfied via VIP skip",
+                user_id=user_id,
+            )
+            return {
+                "can_complete": True,
+                "reason": None,
+                "requirements": {
+                    "vip_onboarding_skipped": {
+                        "required": False,
+                        "current": True,
+                        "satisfied": True,
+                    }
+                },
+                "user_profile": {
+                    "onboarding_step": profile.onboarding_step,
+                    "gmail_connected": profile.gmail_connected,
+                    "onboarding_completed": profile.onboarding_completed,
+                },
+            }
 
         if profile.email_style_skipped and profile.onboarding_completed:
             logger.info(

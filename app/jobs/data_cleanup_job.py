@@ -71,6 +71,8 @@ class DataCleanupJob:
             "success": True,
             "deleted_expired_grace_periods": 0,
             "deleted_old_cached_data": 0,
+            "deleted_contact_identities_disconnected": 0,
+            "deleted_contact_identities_expired": 0,
             "deleted_old_audit_logs": 0,
             "errors": [],
         }
@@ -101,7 +103,34 @@ class DataCleanupJob:
                 result["errors"].append(error_msg)
 
             # ================================================================
-            # 3. Delete old audit logs (1 year retention)
+            # 3. Delete contact identities (disconnect + retention)
+            # ================================================================
+            try:
+                disconnected_count = await self._delete_disconnected_contact_identities()
+                result["deleted_contact_identities_disconnected"] = disconnected_count
+                logger.info(
+                    "Contact identities deleted for disconnected users",
+                    count=disconnected_count,
+                )
+            except Exception as e:
+                error_msg = f"Failed to delete disconnected contact identities: {e}"
+                logger.error(error_msg)
+                result["errors"].append(error_msg)
+
+            try:
+                expired_count = await self._delete_old_contact_identities()
+                result["deleted_contact_identities_expired"] = expired_count
+                logger.info(
+                    "Expired contact identities deleted",
+                    count=expired_count,
+                )
+            except Exception as e:
+                error_msg = f"Failed to delete expired contact identities: {e}"
+                logger.error(error_msg)
+                result["errors"].append(error_msg)
+
+            # ================================================================
+            # 4. Delete old audit logs (1 year retention)
             # ================================================================
             try:
                 audit_log_count = await self._delete_old_audit_logs()
@@ -256,6 +285,49 @@ class DataCleanupJob:
         )
 
         return total_deleted
+
+    async def _delete_disconnected_contact_identities(self) -> int:
+        """
+        Delete contact identities for users who have disconnected Gmail.
+        """
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    DELETE FROM contact_identities ci
+                    USING users u
+                    WHERE ci.user_id = u.id
+                      AND (u.gmail_connected = false OR u.is_active = false)
+                    """
+                )
+                return cursor.rowcount
+
+    async def _delete_old_contact_identities(self) -> int:
+        """
+        Delete contact identities older than the retention window.
+        """
+        retention_days = settings.DATA_RETENTION_CONTACT_IDENTITIES_DAYS
+        cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    DELETE FROM contact_identities
+                    WHERE updated_at < %s
+                    """,
+                    (cutoff_date,),
+                )
+                deleted_count = cursor.rowcount
+
+        logger.info(
+            "Contact identities retention cleanup",
+            retention_days=retention_days,
+            cutoff_date=cutoff_date.isoformat(),
+            deleted_count=deleted_count,
+        )
+
+        return deleted_count
 
     async def _delete_old_audit_logs(self) -> int:
         """

@@ -6,15 +6,24 @@ retrieving candidate VIPs for the onboarding flow.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.auth.verify import auth_dependency
 from app.config import settings
 from app.features.vip_onboarding.pipeline.aggregation import contact_aggregation_service
+from app.features.vip_onboarding.pipeline.aggregation.repository import (
+    ContactAggregationRepository,
+)
 from app.features.vip_onboarding.pipeline.scoring import scoring_service
+from app.features.vip_onboarding.domain import ContactIdentityRecord
+from app.features.vip_onboarding.repository.contact_identity_repository import (
+    ContactIdentityRepository,
+)
 from app.infrastructure.observability.logging import get_logger
 from app.middleware.rate_limit_dependencies import rate_limit_user
+from app.security.hashing import hash_email
 from app.services.core.onboarding_service import get_onboarding_status
+from app.services.infrastructure.encryption_service import encrypt_data
 from app.utils.audit_helpers import audit_data_modification, audit_pii_access
 
 router = APIRouter(prefix="/onboarding/vips", tags=["onboarding-vips"])
@@ -23,6 +32,11 @@ logger = get_logger(__name__)
 
 class VipSelectionRequest(BaseModel):
     contacts: list[str] = Field(..., min_length=1, max_length=20)
+
+
+class VipManualContactRequest(BaseModel):
+    email: EmailStr
+    display_name: str | None = Field(default=None, max_length=120)
 
 
 @router.get("/status")
@@ -34,6 +48,16 @@ async def get_vip_onboarding_status(claims: dict = Depends(auth_dependency)) -> 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token: missing user ID",
+        )
+    if not settings.VIP_BACKFILL_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="VIP backfill is currently disabled.",
+        )
+    if not settings.VIP_IDENTITY_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Manual contact add is disabled until VIP identity storage is enabled.",
         )
 
     profile = await get_onboarding_status(user_id)
@@ -67,6 +91,9 @@ async def get_vip_onboarding_status(claims: dict = Depends(auth_dependency)) -> 
         "job_status": job_status_value,
         "error_message": error_message,
         "can_retry": can_retry,
+        "vip_onboarding_skipped": getattr(profile, "vip_onboarding_skipped", False),
+        "vip_acquisition_status": getattr(profile, "vip_acquisition_status", "active"),
+        "vip_last_attempt_at": getattr(profile, "vip_last_attempt_at", None),
     }
 
 
@@ -297,3 +324,106 @@ async def save_vip_selection(
         # Don't fail the request - VIP selection was saved successfully
 
     return None
+
+
+@router.post("/skip", status_code=204)
+async def skip_vip_onboarding(
+    req: Request,
+    claims: dict = Depends(auth_dependency),
+    _rate: None = Depends(
+        lambda r, c=Depends(auth_dependency): rate_limit_user(
+            r, c, user_limit=settings.get_rate_limits()["write_endpoints"]
+        )
+    ),
+):
+    """
+    Skip VIP selection and complete onboarding.
+    """
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing user ID",
+        )
+
+    from app.services.core.onboarding_service import (
+        OnboardingServiceError,
+        skip_vip_onboarding as skip_vip_onboarding_step,
+    )
+
+    try:
+        await skip_vip_onboarding_step(user_id)
+    except OnboardingServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await audit_data_modification(
+        request=req,
+        user_id=user_id,
+        action="vip_onboarding_skipped",
+        resource_type="vip_onboarding",
+        changes={"skipped_at": "now"},
+    )
+
+    return None
+
+
+@router.post("/manual", status_code=201)
+async def add_manual_contact(
+    req: Request,
+    payload: VipManualContactRequest,
+    claims: dict = Depends(auth_dependency),
+    _rate: None = Depends(
+        lambda r, c=Depends(auth_dependency): rate_limit_user(
+            r, c, user_limit=settings.get_rate_limits()["write_endpoints"]
+        )
+    ),
+) -> dict:
+    """
+    Manually add a contact for VIP selection.
+
+    This endpoint stores encrypted identity data and ensures a contact row exists
+    for selection validation.
+    """
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing user ID",
+        )
+
+    email = payload.email.strip().lower()
+    display_name = payload.display_name.strip() if payload.display_name else None
+    contact_hash = hash_email(email)
+
+    await ContactAggregationRepository.ensure_contact_exists(user_id, contact_hash)
+
+    await ContactIdentityRepository.upsert_identities(
+        [
+            ContactIdentityRecord(
+                user_id=user_id,
+                contact_hash=contact_hash,
+                email_encrypted=encrypt_data(email),
+                display_name_encrypted=encrypt_data(display_name) if display_name else None,
+            )
+        ]
+    )
+
+    await audit_data_modification(
+        request=req,
+        user_id=user_id,
+        action="vip_manual_contact_added",
+        resource_type="vip_contact_identity",
+        changes={"contact_hash": contact_hash},
+    )
+
+    await audit_pii_access(
+        request=req,
+        user_id=user_id,
+        action="vip_manual_contact_added",
+        resource_type="vip_contact_identity",
+        resource_id=contact_hash,
+        resource_count=1,
+        pii_fields=["email", "display_name"],
+    )
+
+    return {"contact_hash": contact_hash, "email": email, "display_name": display_name}

@@ -33,6 +33,9 @@ class UserProfile(BaseModel):
     # Legacy compatibility field (frontend expects "step")
     step: str | None = None
     email_style_skipped: bool = False
+    vip_onboarding_skipped: bool = False
+    vip_acquisition_status: str = "active"
+    vip_last_attempt_at: datetime | None = None
 
     voice_preferences: dict[str, Any]
     plan: Plan

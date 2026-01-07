@@ -386,7 +386,7 @@ class CalendarConnectionService:
             time_max = now + timedelta(hours=hours_ahead)
 
             # Get events
-            events = await google_calendar_service.list_events(
+            events, _ = await google_calendar_service.list_events(
                 access_token=oauth_tokens.access_token,
                 time_min=now,
                 time_max=time_max,

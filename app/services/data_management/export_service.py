@@ -33,6 +33,7 @@ from uuid import UUID
 
 from app.db.pool import db_pool
 from app.infrastructure.observability.logging import get_logger
+from app.services.infrastructure.encryption_service import decrypt_data, EncryptionError
 
 logger = get_logger(__name__)
 
@@ -100,6 +101,13 @@ class DataExportService:
         except Exception as e:
             logger.error("Failed to export contacts", error=str(e))
             export_data["contacts"] = {"error": str(e)}
+
+        try:
+            identities_data = await self._export_contact_identities(user_id_str)
+            export_data["contact_identities"] = identities_data
+        except Exception as e:
+            logger.error("Failed to export contact identities", error=str(e))
+            export_data["contact_identities"] = {"error": str(e)}
 
         try:
             email_data = await self._export_email_metadata(user_id_str)
@@ -265,6 +273,69 @@ class DataExportService:
             "contacts": contacts,
             "total_count": len(contacts),
             "note": "Limited to top 1000 contacts by VIP score. Contact hashes are pseudonymized.",
+        }
+
+    # =======================================================================
+    # PRIVATE METHODS - Contact Identities
+    # =======================================================================
+
+    async def _export_contact_identities(self, user_id: str) -> dict:
+        """Export decrypted contact identities."""
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT
+                        contact_hash,
+                        email_encrypted,
+                        display_name_encrypted,
+                        created_at,
+                        updated_at
+                    FROM contact_identities
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+                rows = await cursor.fetchall()
+
+        identities = []
+        for row in rows:
+            email_encrypted = row[1]
+            display_name_encrypted = row[2]
+            if isinstance(email_encrypted, memoryview):
+                email_encrypted = email_encrypted.tobytes()
+            if isinstance(display_name_encrypted, memoryview):
+                display_name_encrypted = display_name_encrypted.tobytes()
+
+            email = None
+            display_name = None
+            try:
+                email = decrypt_data(email_encrypted) if email_encrypted else None
+                display_name = (
+                    decrypt_data(display_name_encrypted) if display_name_encrypted else None
+                )
+            except EncryptionError as exc:
+                logger.warning(
+                    "Failed to decrypt contact identity during export",
+                    user_id=user_id,
+                    contact_hash=row[0],
+                    error=str(exc),
+                )
+
+            identities.append(
+                {
+                    "contact_hash": row[0],
+                    "email": email,
+                    "display_name": display_name,
+                    "created_at": row[3].isoformat() if row[3] else None,
+                    "updated_at": row[4].isoformat() if row[4] else None,
+                }
+            )
+
+        return {
+            "identities": identities,
+            "total_count": len(identities),
+            "note": "Contact identities are decrypted for data portability.",
         }
 
     # =======================================================================

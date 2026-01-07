@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.db.helpers import execute_query, fetch_all
+from app.db.helpers import execute_query, execute_transaction, fetch_all
 from app.infrastructure.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -275,6 +275,8 @@ class ContactAggregationRepository:
                 meeting_recurrence_score,
                 consistency_score,
                 initiation_score,
+                email_domain,
+                is_shared_inbox,
                 vip_score,
                 confidence_score
             FROM contacts
@@ -300,3 +302,39 @@ class ContactAggregationRepository:
         if not rows:
             return 0
         return rows[0]["total"]
+
+    @classmethod
+    async def ensure_contact_exists(cls, user_id: str, contact_hash: str) -> None:
+        query = """
+            INSERT INTO contacts (user_id, contact_hash)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, contact_hash) DO NOTHING
+        """
+
+        await execute_query(query, (user_id, contact_hash))
+
+    @classmethod
+    async def update_contact_attributes(
+        cls,
+        user_id: str,
+        updates: Iterable[tuple[str, str | None, bool]],
+    ) -> None:
+        """
+        Batch update email_domain and is_shared_inbox for contacts.
+        """
+        query = """
+            UPDATE contacts
+            SET email_domain = %s,
+                is_shared_inbox = %s,
+                updated_at = NOW()
+            WHERE user_id = %s
+              AND contact_hash = %s
+        """
+
+        queries = [
+            (query, (email_domain, is_shared_inbox, user_id, contact_hash))
+            for contact_hash, email_domain, is_shared_inbox in updates
+        ]
+
+        if queries:
+            await execute_transaction(queries)

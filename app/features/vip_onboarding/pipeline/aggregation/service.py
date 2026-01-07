@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from app.infrastructure.observability.logging import get_logger
 from app.security.hashing import hash_email
 from app.services.core.user_service import get_user_profile
+from app.config import settings
 
 from .repository import (
     ContactAggregate,
@@ -62,6 +63,9 @@ class _ContactWorkingSet:
 class ContactAggregationService:
     EMAIL_LOOKBACK_DAYS = 30
     MEETING_LOOKBACK_DAYS = 30
+    EXTENDED_EMAIL_LOOKBACK_DAYS = 90
+    EXTENDED_MEETING_LOOKBACK_DAYS = 90
+    MIN_CONTACT_THRESHOLD = 15
 
     async def aggregate_contacts_for_user(self, user_id: str) -> int:
         profile = await get_user_profile(user_id)
@@ -82,6 +86,20 @@ class ContactAggregationService:
         events = await ContactAggregationRepository.fetch_event_metadata(
             user_id, meeting_window_start, now
         )
+
+        unique_contacts = self._count_unique_contacts(user_email_hash, emails, events)
+        if (
+            settings.VIP_LOOKBACK_EXPANSION_ENABLED
+            and unique_contacts < self.MIN_CONTACT_THRESHOLD
+        ):
+            email_window_start = now - timedelta(days=self.EXTENDED_EMAIL_LOOKBACK_DAYS)
+            meeting_window_start = now - timedelta(days=self.EXTENDED_MEETING_LOOKBACK_DAYS)
+            emails = await ContactAggregationRepository.fetch_email_metadata(
+                user_id, email_window_start
+            )
+            events = await ContactAggregationRepository.fetch_event_metadata(
+                user_id, meeting_window_start, now
+            )
 
         aggregates = self._build_contact_aggregates(user_id, user_email_hash, emails, events)
 
@@ -108,6 +126,7 @@ class ContactAggregationService:
         events: list[EventMetadataRow],
     ) -> dict[str, ContactAggregate]:
         contacts: dict[str, _ContactWorkingSet] = {}
+        source_flags: defaultdict[str, set[str]] = defaultdict(set)
 
         def ensure_contact(contact_hash: str) -> _ContactWorkingSet:
             if contact_hash not in contacts:
@@ -122,6 +141,9 @@ class ContactAggregationService:
             if not primary_hash:
                 continue
             contact = ensure_contact(primary_hash)
+            source_flags[primary_hash].add(
+                "gmail_in" if email.direction == "in" else "gmail_out"
+            )
             contact.email_count += 1
             contact.timestamps.append(email.timestamp)
             contact.thread_ids.add(email.thread_id)
@@ -147,6 +169,9 @@ class ContactAggregationService:
                 if not cc_hash or cc_hash == primary_hash:
                     continue
                 cc_contact = ensure_contact(cc_hash)
+                source_flags[cc_hash].add(
+                    "gmail_in" if email.direction == "in" else "gmail_out"
+                )
                 cc_contact.cc_count += 1
 
         # Process meetings
@@ -165,6 +190,7 @@ class ContactAggregationService:
 
             for contact_hash in attendee_set:
                 contact = ensure_contact(contact_hash)
+                source_flags[contact_hash].add("calendar")
                 contact.meeting_count += 1
                 contact.total_meeting_minutes += duration
                 if event.is_recurring:
@@ -279,7 +305,42 @@ class ContactAggregationService:
             )
             aggregates[contact_hash] = aggregate
 
+        if source_flags:
+            flag_counts: dict[str, int] = {}
+            for flags in source_flags.values():
+                for flag in flags:
+                    flag_counts[flag] = flag_counts.get(flag, 0) + 1
+            logger.debug(
+                "Contact source flags summary",
+                user_id=user_id,
+                flag_counts=flag_counts,
+            )
+
         return aggregates
+
+    def _count_unique_contacts(
+        self,
+        user_email_hash: str,
+        emails: list[EmailMetadataRow],
+        events: list[EventMetadataRow],
+    ) -> int:
+        unique: set[str] = set()
+
+        for email in emails:
+            for contact_hash in [
+                email.from_contact_hash,
+                email.to_contact_hash,
+                *email.cc_contact_hashes,
+            ]:
+                if contact_hash and contact_hash != user_email_hash:
+                    unique.add(contact_hash)
+
+        for event in events:
+            for contact_hash in event.attendee_contact_hashes or []:
+                if contact_hash and contact_hash != user_email_hash:
+                    unique.add(contact_hash)
+
+        return len(unique)
 
     def _calculate_meeting_weight(
         self, attendee_count: int, duration_minutes: int, is_recurring: bool

@@ -39,6 +39,16 @@ async def _process_job(job_id: str) -> None:
         logger.info("Skipping VIP backfill job - already running", job_id=job_id)
         return
 
+    if not settings.VIP_BACKFILL_ENABLED:
+        await VipRepository.mark_job_failed(job.id, "VIP backfill disabled by feature flag")
+        logger.info(
+            "Skipping VIP backfill job - disabled",
+            job_id=job_id,
+            user_id=job.user_id,
+            flag="VIP_BACKFILL_ENABLED",
+        )
+        return
+
     try:
         await VipRepository.mark_job_running(job.id)
         await vip_backfill_service.run(job)

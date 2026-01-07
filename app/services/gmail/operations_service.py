@@ -153,7 +153,7 @@ class GmailConnectionService:
         """
         try:
             # Test by listing a few messages from inbox
-            messages = await google_gmail_service.list_messages(
+            messages, _, _ = await google_gmail_service.list_messages(
                 access_token, max_results=5, label_ids=["INBOX"]
             )
 
@@ -325,7 +325,7 @@ class GmailConnectionService:
                 label_ids.append("UNREAD")
 
             # Get messages with total count
-            messages, total_count = await google_gmail_service.list_messages(
+            messages, total_count, _ = await google_gmail_service.list_messages(
                 access_token=oauth_tokens.access_token,
                 max_results=max_results,
                 label_ids=label_ids,
@@ -447,7 +447,7 @@ class GmailConnectionService:
                 raise GmailConnectionError("No Gmail permissions", user_id=user_id)
 
             # Search messages
-            messages = await google_gmail_service.list_messages(
+            messages, _, _ = await google_gmail_service.list_messages(
                 access_token=oauth_tokens.access_token,
                 max_results=max_results,
                 query=query,

@@ -4,6 +4,7 @@ Domain subpackage for VIP onboarding feature.
 
 from .models import (
     CalendarEventRecord,
+    ContactIdentityRecord,
     EmailMetadataRecord,
     VipBackfillJob,
     VipCandidate,
@@ -11,6 +12,7 @@ from .models import (
 
 __all__ = [
     "CalendarEventRecord",
+    "ContactIdentityRecord",
     "EmailMetadataRecord",
     "VipBackfillJob",
     "VipCandidate",

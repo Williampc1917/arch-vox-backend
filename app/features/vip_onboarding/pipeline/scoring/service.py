@@ -10,9 +10,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from app.config import settings
 from app.infrastructure.observability.logging import get_logger
+from app.services.core.user_service import get_user_profile
+from app.services.infrastructure.encryption_service import decrypt_data, EncryptionError
 
 from .repository import VipScoringRepository
+from app.features.vip_onboarding.repository.contact_identity_repository import (
+    ContactIdentityRepository,
+)
+from app.features.vip_onboarding.pipeline.aggregation.repository import (
+    ContactAggregationRepository,
+)
 
 logger = get_logger(__name__)
 
@@ -49,13 +58,12 @@ class AggregatedContact:
     first_contact_at: datetime | None
     consistency_score: float
     initiation_score: float
+    email_domain: str | None = None
+    is_shared_inbox: bool = False
 
     @property
     def last_activity(self) -> datetime | None:
         return self.last_contact_at or self.first_contact_at
-
-
-11113
 
 
 @dataclass(slots=True)
@@ -72,6 +80,41 @@ class ScoredContact:
 class ScoringService:
     DEFAULT_LIMIT = 50
     MAX_SELECTION = 20
+    PERSONAL_DOMAINS = {
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "yahoo.co.uk",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "pm.me",
+    }
+    SHARED_INBOX_PATTERNS = {
+        "support",
+        "help",
+        "info",
+        "team",
+        "sales",
+        "billing",
+        "careers",
+        "admin",
+        "office",
+        "hr",
+        "noreply",
+        "no-reply",
+        "donotreply",
+        "do-not-reply",
+        "newsletter",
+        "notifications",
+    }
 
     async def score_contacts_for_user(
         self, user_id: str, limit: int = DEFAULT_LIMIT, force_rescore: bool = False
@@ -87,10 +130,19 @@ class ScoringService:
         Returns:
             List of scored contacts, sorted by VIP score descending
         """
+        user_domain = None
+        is_custom_domain = False
+        if settings.VIP_DOMAIN_SCORING_ENABLED:
+            profile = await get_user_profile(user_id)
+            user_domain = self._extract_domain(profile.email if profile else None)
+            is_custom_domain = bool(user_domain and user_domain not in self.PERSONAL_DOMAINS)
+
         # Check if we have cached scores (from previous scoring)
         if not force_rescore:
             cached = await self._get_cached_scores(user_id, limit)
             if cached:
+                if settings.VIP_IDENTITY_ENABLED:
+                    await self._apply_identities(user_id, cached)
                 logger.info(
                     "Returning cached VIP scores",
                     user_id=user_id,
@@ -105,9 +157,15 @@ class ScoringService:
             user_id, limit * 2
         )  # fetch extra for filtering
         contacts = [self._row_to_contact(user_id, row) for row in rows]
+        if settings.VIP_IDENTITY_ENABLED:
+            await self._hydrate_contacts(user_id, contacts)
 
         scored = [
-            score for score in (self._score_contact(c) for c in contacts) if score is not None
+            score
+            for score in (
+                self._score_contact(c, user_domain, is_custom_domain) for c in contacts
+            )
+            if score is not None
         ]
         scored.sort(key=lambda c: c.vip_score, reverse=True)
         top = scored[:limit]
@@ -178,6 +236,8 @@ class ScoringService:
                 first_contact_at=row.get("first_contact_at"),
                 consistency_score=row.get("consistency_score", 0.5) or 0.5,
                 initiation_score=row.get("initiation_score", 0.5) or 0.5,
+                email_domain=row.get("email_domain"),
+                is_shared_inbox=row.get("is_shared_inbox") or False,
             )
 
             raw_metrics = {
@@ -221,6 +281,90 @@ class ScoringService:
 
         return cached_contacts[:limit] if cached_contacts else None
 
+    async def _apply_identities(self, user_id: str, contacts: list[ScoredContact]) -> None:
+        if not contacts:
+            return
+
+        contact_hashes = [contact.contact_hash for contact in contacts]
+        identity_rows = await ContactIdentityRepository.fetch_identities(
+            user_id, contact_hashes
+        )
+
+        for contact in contacts:
+            identity = identity_rows.get(contact.contact_hash)
+            if not identity:
+                continue
+            try:
+                email_encrypted = identity.get("email_encrypted")
+                display_name_encrypted = identity.get("display_name_encrypted")
+                if isinstance(email_encrypted, memoryview):
+                    email_encrypted = email_encrypted.tobytes()
+                if isinstance(display_name_encrypted, memoryview):
+                    display_name_encrypted = display_name_encrypted.tobytes()
+                contact.email = (
+                    decrypt_data(email_encrypted) if email_encrypted else contact.email
+                )
+                contact.display_name = (
+                    decrypt_data(display_name_encrypted)
+                    if display_name_encrypted
+                    else contact.display_name
+                )
+            except EncryptionError as exc:
+                logger.warning(
+                    "Failed to decrypt contact identity",
+                    user_id=user_id,
+                    contact_hash=contact.contact_hash,
+                    error=str(exc),
+                )
+
+    async def _hydrate_contacts(
+        self, user_id: str, contacts: list[AggregatedContact]
+    ) -> None:
+        if not contacts:
+            return
+
+        contact_hashes = [contact.contact_hash for contact in contacts]
+        identity_rows = await ContactIdentityRepository.fetch_identities(
+            user_id, contact_hashes
+        )
+        updates: list[tuple[str, str | None, bool]] = []
+
+        for contact in contacts:
+            identity = identity_rows.get(contact.contact_hash)
+            if not identity:
+                continue
+            try:
+                email_encrypted = identity.get("email_encrypted")
+                display_name_encrypted = identity.get("display_name_encrypted")
+                if isinstance(email_encrypted, memoryview):
+                    email_encrypted = email_encrypted.tobytes()
+                if isinstance(display_name_encrypted, memoryview):
+                    display_name_encrypted = display_name_encrypted.tobytes()
+                contact.email = (
+                    decrypt_data(email_encrypted) if email_encrypted else contact.email
+                )
+                contact.display_name = (
+                    decrypt_data(display_name_encrypted)
+                    if display_name_encrypted
+                    else contact.display_name
+                )
+                if settings.VIP_DOMAIN_SCORING_ENABLED:
+                    contact.email_domain = self._extract_domain(contact.email)
+                    contact.is_shared_inbox = self._is_shared_inbox(contact.email, contact)
+                    updates.append(
+                        (contact.contact_hash, contact.email_domain, contact.is_shared_inbox)
+                    )
+            except EncryptionError as exc:
+                logger.warning(
+                    "Failed to decrypt contact identity",
+                    user_id=user_id,
+                    contact_hash=contact.contact_hash,
+                    error=str(exc),
+                )
+
+        if updates:
+            await ContactAggregationRepository.update_contact_attributes(user_id, updates)
+
     async def save_vip_selection(self, user_id: str, contact_hashes: Iterable[str]) -> None:
         hashes = list(dict.fromkeys(contact_hashes))
         if not hashes:
@@ -263,9 +407,16 @@ class ScoringService:
             meetings_they_organized=row.get("meetings_they_organized", 0),
             consistency_score=row.get("consistency_score", 0.5) or 0.5,
             initiation_score=row.get("initiation_score", 0.5) or 0.5,
+            email_domain=row.get("email_domain"),
+            is_shared_inbox=row.get("is_shared_inbox") or False,
         )
 
-    def _score_contact(self, contact: AggregatedContact) -> ScoredContact | None:
+    def _score_contact(
+        self,
+        contact: AggregatedContact,
+        user_domain: str | None,
+        is_custom_domain: bool,
+    ) -> ScoredContact | None:
         should_exclude, exclude_reason = self._should_exclude(contact)
         if should_exclude:
             logger.debug(
@@ -297,8 +448,14 @@ class ScoringService:
 
         base_score = self._base_score(scores)
         score = self._apply_signal_bonuses(contact, scores, base_score)
+        if settings.VIP_SCORING_REFINEMENTS_ENABLED:
+            score = self._apply_multi_source_boost(contact, score)
         score = self._apply_edge_cases(contact, scores, score)
         score = self._apply_penalties(contact, scores, score)
+        if settings.VIP_DOMAIN_SCORING_ENABLED:
+            score = self._apply_domain_adjustments(contact, score, user_domain, is_custom_domain)
+        if settings.VIP_SCORING_REFINEMENTS_ENABLED:
+            score = self._apply_age_decay(contact, score)
         confidence = self._confidence(contact, scores)
 
         raw_metrics = {
@@ -325,6 +482,8 @@ class ScoringService:
             "first_contact_at": (
                 contact.first_contact_at.isoformat() if contact.first_contact_at else None
             ),
+            "email_domain": contact.email_domain,
+            "is_shared_inbox": contact.is_shared_inbox,
         }
 
         return ScoredContact(
@@ -468,8 +627,6 @@ class ScoringService:
         self, contact: AggregatedContact, scores: dict[str, float], base_score: float
     ) -> float:
         multiplier = 1.0
-        if contact.meeting_count_30d >= 2 and contact.email_count_30d >= 5:
-            multiplier *= 1.08
         if contact.starred_email_count >= 3:
             multiplier *= 1.10
         elif contact.starred_email_count >= 1:
@@ -483,6 +640,14 @@ class ScoringService:
             if days_since_first >= 180 and scores["recency"] >= 0.5:
                 multiplier *= 1.04
         return base_score * multiplier
+
+    def _apply_multi_source_boost(self, contact: AggregatedContact, score: float) -> float:
+        multiplier = 1.0
+        if contact.meeting_count_30d >= 2 and contact.email_count_30d >= 5:
+            multiplier *= 1.08
+        elif contact.meeting_count_30d >= 1 and contact.email_count_30d >= 1:
+            multiplier *= 1.04
+        return score * multiplier
 
     def _apply_edge_cases(
         self, contact: AggregatedContact, scores: dict[str, float], current: float
@@ -538,6 +703,60 @@ class ScoringService:
         if scores["frequency"] >= 0.5 and scores["engagement"] < 0.15:
             multiplier *= 0.7
         return current * multiplier
+
+    def _apply_domain_adjustments(
+        self,
+        contact: AggregatedContact,
+        score: float,
+        user_domain: str | None,
+        is_custom_domain: bool,
+    ) -> float:
+        multiplier = 1.0
+        if is_custom_domain and user_domain and contact.email_domain == user_domain:
+            multiplier *= 1.05
+        if contact.is_shared_inbox and not self._has_strong_engagement(contact):
+            multiplier *= 0.85
+        return score * multiplier
+
+    def _has_strong_engagement(self, contact: AggregatedContact) -> bool:
+        two_way = contact.inbound_count_30d > 0 and contact.outbound_count_30d > 0
+        if two_way and contact.reply_rate_30d >= 0.2:
+            return True
+        if contact.meeting_count_30d >= 1 and contact.reply_rate_30d >= 0.1:
+            return True
+        return False
+
+    def _apply_age_decay(self, contact: AggregatedContact, score: float) -> float:
+        last_activity = contact.last_activity
+        if not last_activity:
+            return score
+        days_since = (datetime.now(UTC) - last_activity).days
+        if days_since <= 30:
+            return score
+        decay = math.exp(-((days_since - 30) / 120.0))
+        return score * max(0.5, decay)
+
+    def _extract_domain(self, email: str | None) -> str | None:
+        if not email or "@" not in email:
+            return None
+        return email.split("@", 1)[1].strip().lower()
+
+    def _is_shared_inbox(self, email: str | None, contact: AggregatedContact) -> bool:
+        if email and "@" in email:
+            local_part = email.split("@", 1)[0].lower()
+            local_part = local_part.split("+", 1)[0]
+            if local_part in self.SHARED_INBOX_PATTERNS:
+                return True
+
+        if (
+            contact.inbound_count_30d >= 8
+            and contact.outbound_count_30d == 0
+            and contact.reply_rate_30d < 0.1
+            and contact.avg_thread_depth < 1.5
+        ):
+            return True
+
+        return False
 
     def _confidence(self, contact: AggregatedContact, scores: dict[str, float]) -> float:
         total = contact.email_count_30d + contact.meeting_count_30d

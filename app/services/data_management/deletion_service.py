@@ -127,6 +127,17 @@ class DataDeletionService:
             deleted_items["contacts"] = 0
 
         # ===================================================================
+        # 3b. Delete contact identities (derived PII, no soft delete)
+        # ===================================================================
+        try:
+            identities_count = await self._hard_delete_contact_identities(user_id_str)
+            deleted_items["contact_identities"] = identities_count
+            logger.info("Contact identities deleted", count=identities_count)
+        except Exception as e:
+            logger.error("Failed to delete contact identities", error=str(e))
+            deleted_items["contact_identities"] = 0
+
+        # ===================================================================
         # 4. Soft delete email metadata
         # ===================================================================
         try:
@@ -247,6 +258,13 @@ class DataDeletionService:
         except Exception as e:
             logger.error("Failed to hard delete contacts", error=str(e))
             deleted_items["contacts"] = 0
+
+        try:
+            identities_count = await self._hard_delete_contact_identities(user_id_str)
+            deleted_items["contact_identities"] = identities_count
+        except Exception as e:
+            logger.error("Failed to hard delete contact identities", error=str(e))
+            deleted_items["contact_identities"] = 0
 
         try:
             email_count = await self._hard_delete_email_metadata(user_id_str)
@@ -459,6 +477,14 @@ class DataDeletionService:
         async with db_pool.connection() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute("DELETE FROM contacts WHERE user_id = %s", (user_id,))
+                return cursor.rowcount
+
+    async def _hard_delete_contact_identities(self, user_id: str) -> int:
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    "DELETE FROM contact_identities WHERE user_id = %s", (user_id,)
+                )
                 return cursor.rowcount
 
     async def _cancel_contacts_deletion(self, user_id: str) -> int:

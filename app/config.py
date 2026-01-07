@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     TOKEN_REFRESH_ENABLED: bool = False
     VIP_BACKFILL_ENABLED: bool = False
     VIP_BACKFILL_QUEUE_NAME: str = "vip_backfill:pq"
+    VIP_IDENTITY_ENABLED: bool = False
+    VIP_PREFILTER_ENABLED: bool = False
+    VIP_DOMAIN_SCORING_ENABLED: bool = False
+    VIP_SCORING_REFINEMENTS_ENABLED: bool = False
+    VIP_LOOKBACK_EXPANSION_ENABLED: bool = False
+    VIP_IDENTITY_BACKFILL_ENABLED: bool = False
+    VIP_IDENTITY_BACKFILL_LIMIT: int | None = None
 
     # =================================================================
     # RATE LIMITING SETTINGS - Anti-abuse and compliance
@@ -99,6 +106,7 @@ class Settings(BaseSettings):
     # =================================================================
     # Data retention periods (in days)
     DATA_RETENTION_CACHED_DATA_DAYS: int = 90  # OAuth tokens, email cache, VIP data
+    DATA_RETENTION_CONTACT_IDENTITIES_DAYS: int = 90  # Encrypted contact identities
     DATA_RETENTION_AUDIT_LOGS_DAYS: int = 365  # 1 year for audit logs (compliance)
     DATA_RETENTION_GRACE_PERIOD_DAYS: int = 30  # Soft delete grace period
 
@@ -279,6 +287,7 @@ class Settings(BaseSettings):
         if self.environment == "production":
             return {
                 "cached_data_days": self.DATA_RETENTION_CACHED_DATA_DAYS,
+                "contact_identities_days": self.DATA_RETENTION_CONTACT_IDENTITIES_DAYS,
                 "audit_logs_days": self.DATA_RETENTION_AUDIT_LOGS_DAYS,
                 "grace_period_days": self.DATA_RETENTION_GRACE_PERIOD_DAYS,
                 "cleanup_enabled": True,  # Always enable cleanup in production
@@ -291,6 +300,7 @@ class Settings(BaseSettings):
             # Development: Manual cleanup only
             return {
                 "cached_data_days": self.DATA_RETENTION_CACHED_DATA_DAYS,
+                "contact_identities_days": self.DATA_RETENTION_CONTACT_IDENTITIES_DAYS,
                 "audit_logs_days": self.DATA_RETENTION_AUDIT_LOGS_DAYS,
                 "grace_period_days": self.DATA_RETENTION_GRACE_PERIOD_DAYS,
                 "cleanup_enabled": False,  # Disable automatic cleanup in dev

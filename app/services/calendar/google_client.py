@@ -259,7 +259,8 @@ class GoogleCalendarService:
         time_max: datetime | None = None,
         max_results: int = 50,
         single_events: bool = True,
-    ) -> list[CalendarEvent]:
+        page_token: str | None = None,
+    ) -> tuple[list[CalendarEvent], str | None]:
         """
         List events from a calendar.
 
@@ -270,9 +271,10 @@ class GoogleCalendarService:
             time_max: End time filter (optional)
             max_results: Maximum number of events to return
             single_events: Expand recurring events into individual instances
+            page_token: Token for pagination
 
         Returns:
-            List[CalendarEvent]: List of calendar events
+            Tuple[list[CalendarEvent], str | None]: (Events, next page token)
 
         Raises:
             GoogleCalendarError: If listing events fails
@@ -297,6 +299,9 @@ class GoogleCalendarService:
             if time_max:
                 params["timeMax"] = time_max.isoformat()
 
+            if page_token:
+                params["pageToken"] = page_token
+
             logger.info(
                 "Listing calendar events",
                 calendar_id=calendar_id,
@@ -307,6 +312,8 @@ class GoogleCalendarService:
 
             response = await self._request_with_retry("GET", url, headers=headers, params=params)
             data = self._handle_api_response(response, "list_events")
+
+            next_page_token = data.get("nextPageToken")
 
             # Convert to domain models
             events = []
@@ -319,7 +326,7 @@ class GoogleCalendarService:
                 calendar_id=calendar_id,
                 event_count=len(events),
             )
-            return events
+            return events, next_page_token
 
         except GoogleCalendarError:
             raise
@@ -717,7 +724,7 @@ async def get_calendar_events(
     time_min: datetime | None = None,
     time_max: datetime | None = None,
     max_results: int = 50,
-) -> list[CalendarEvent]:
+) -> tuple[list[CalendarEvent], str | None]:
     """Get events from calendar."""
     return await google_calendar_service.list_events(
         access_token, calendar_id, time_min, time_max, max_results

@@ -15,6 +15,9 @@ from app.services.core.token_service import (
     refresh_oauth_tokens,
     revoke_oauth_tokens,
 )
+from app.features.vip_onboarding.repository.contact_identity_repository import (
+    ContactIdentityRepository,
+)
 from app.services.infrastructure.google_oauth_service import (
     GoogleOAuthError,
     exchange_oauth_code,
@@ -335,6 +338,20 @@ class GmailConnectionService:
 
             # Update onboarding step if user was in Gmail step
             await self._handle_disconnect_onboarding_update(user_id)
+
+            try:
+                deleted = await ContactIdentityRepository.delete_identities_for_user(user_id)
+                logger.info(
+                    "Contact identities cleared after Gmail disconnect",
+                    user_id=user_id,
+                    deleted_count=deleted,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear contact identities after Gmail disconnect",
+                    user_id=user_id,
+                    error=str(exc),
+                )
 
             logger.info(
                 "Gmail disconnection completed", user_id=user_id, revoke_success=revoke_success

@@ -11,6 +11,7 @@ import sys
 from collections.abc import Awaitable, Callable
 
 from app.features.vip_onboarding.jobs.backfill_job import start_vip_backfill_scheduler
+from app.features.vip_onboarding.jobs.identity_backfill_job import run_vip_identity_backfill
 from app.infrastructure.observability.logging import get_logger
 from app.jobs.oauth_cleanup_job import start_oauth_cleanup_scheduler
 from app.jobs.token_refresh_job import start_token_refresh_scheduler
@@ -21,6 +22,7 @@ JobCoroutine = Callable[[], Awaitable[None]]
 
 JOB_REGISTRY: dict[str, JobCoroutine] = {
     "vip_backfill": start_vip_backfill_scheduler,
+    "vip_identity_backfill": run_vip_identity_backfill,
     "token_refresh": start_token_refresh_scheduler,
     "oauth_cleanup": start_oauth_cleanup_scheduler,
 }
