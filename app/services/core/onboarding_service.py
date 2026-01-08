@@ -436,9 +436,7 @@ async def skip_vip_onboarding(user_id: str) -> UserProfile | None:
         raise
     except Exception as e:
         logger.error("Unexpected error skipping VIP selection", user_id=user_id, error=str(e))
-        raise OnboardingServiceError(
-            f"Failed to skip VIP selection: {e}", user_id=user_id
-        ) from e
+        raise OnboardingServiceError(f"Failed to skip VIP selection: {e}", user_id=user_id) from e
 
 
 @with_db_retry(max_retries=3, base_delay=0.1)

@@ -34,6 +34,9 @@ class AggregatedContact:
     display_name: str | None
     last_contact_at: datetime | None
     email_count_30d: int
+    email_count_7d: int
+    email_count_8_30d: int
+    email_count_31_90d: int
     inbound_count_30d: int
     outbound_count_30d: int
     direct_email_count: int
@@ -60,6 +63,7 @@ class AggregatedContact:
     initiation_score: float
     email_domain: str | None = None
     is_shared_inbox: bool = False
+    manual_added: bool = False
 
     @property
     def last_activity(self) -> datetime | None:
@@ -130,9 +134,18 @@ class ScoringService:
         Returns:
             List of scored contacts, sorted by VIP score descending
         """
+        domain_scoring_enabled = settings.VIP_DOMAIN_SCORING_ENABLED
+        if settings.VIP_DOMAIN_SCORING_ENABLED and not settings.VIP_IDENTITY_ENABLED:
+            domain_scoring_enabled = False
+            logger.warning(
+                "Domain scoring disabled because identities are off",
+                user_id=user_id,
+                flag="VIP_DOMAIN_SCORING_ENABLED",
+            )
+
         user_domain = None
         is_custom_domain = False
-        if settings.VIP_DOMAIN_SCORING_ENABLED:
+        if domain_scoring_enabled:
             profile = await get_user_profile(user_id)
             user_domain = self._extract_domain(profile.email if profile else None)
             is_custom_domain = bool(user_domain and user_domain not in self.PERSONAL_DOMAINS)
@@ -153,9 +166,9 @@ class ScoringService:
                 return cached
 
         # No cache or force rescore - compute fresh scores
-        rows = await VipScoringRepository.fetch_contacts(
-            user_id, limit * 2
-        )  # fetch extra for filtering
+        rows = await VipScoringRepository.fetch_contacts_for_rescore(user_id, limit * 2)
+        manual_rows = await VipScoringRepository.fetch_manual_contacts(user_id)
+        rows = self._merge_rows(rows, manual_rows)
         contacts = [self._row_to_contact(user_id, row) for row in rows]
         if settings.VIP_IDENTITY_ENABLED:
             await self._hydrate_contacts(user_id, contacts)
@@ -163,12 +176,13 @@ class ScoringService:
         scored = [
             score
             for score in (
-                self._score_contact(c, user_domain, is_custom_domain) for c in contacts
+                self._score_contact(c, user_domain, is_custom_domain, domain_scoring_enabled)
+                for c in contacts
             )
             if score is not None
         ]
         scored.sort(key=lambda c: c.vip_score, reverse=True)
-        top = scored[:limit]
+        top = self._ensure_manual_contacts_included(scored, limit)
 
         if top:
             await VipScoringRepository.update_contact_scores(user_id, top)
@@ -189,6 +203,8 @@ class ScoringService:
         Returns None if no cached scores exist (vip_score is NULL for all contacts).
         """
         rows = await VipScoringRepository.fetch_contacts(user_id, limit)
+        manual_rows = await VipScoringRepository.fetch_manual_contacts(user_id)
+        rows = self._merge_rows(rows, manual_rows)
 
         if not rows:
             return None
@@ -198,6 +214,10 @@ class ScoringService:
 
         if not scored_rows:
             # No scores exist yet, need to compute
+            return None
+
+        manual_missing_scores = [row for row in manual_rows if row.get("vip_score") is None]
+        if manual_missing_scores:
             return None
 
         # Convert rows to ScoredContact objects
@@ -212,6 +232,9 @@ class ScoringService:
                 display_name=row.get("display_name"),
                 last_contact_at=row.get("last_contact_at"),
                 email_count_30d=row.get("email_count_30d", 0),
+                email_count_7d=row.get("email_count_7d", 0),
+                email_count_8_30d=row.get("email_count_8_30d", 0),
+                email_count_31_90d=row.get("email_count_31_90d", 0),
                 inbound_count_30d=row.get("inbound_count_30d", 0),
                 outbound_count_30d=row.get("outbound_count_30d", 0),
                 direct_email_count=row.get("direct_email_count", 0),
@@ -238,10 +261,14 @@ class ScoringService:
                 initiation_score=row.get("initiation_score", 0.5) or 0.5,
                 email_domain=row.get("email_domain"),
                 is_shared_inbox=row.get("is_shared_inbox") or False,
+                manual_added=row.get("manual_added") or False,
             )
 
             raw_metrics = {
                 "email_count_30d": contact.email_count_30d,
+                "email_count_7d": contact.email_count_7d,
+                "email_count_8_30d": contact.email_count_8_30d,
+                "email_count_31_90d": contact.email_count_31_90d,
                 "inbound_count_30d": contact.inbound_count_30d,
                 "outbound_count_30d": contact.outbound_count_30d,
                 "direct_email_count": contact.direct_email_count,
@@ -258,6 +285,7 @@ class ScoringService:
                 "initiation_score": contact.initiation_score,
                 "off_hours_ratio": contact.off_hours_ratio,
                 "median_response_hours": contact.median_response_hours,
+                "manual_added": contact.manual_added,
                 "last_contact_at": (
                     contact.last_contact_at.isoformat() if contact.last_contact_at else None
                 ),
@@ -279,16 +307,61 @@ class ScoringService:
                 )
             )
 
-        return cached_contacts[:limit] if cached_contacts else None
+        if not cached_contacts:
+            return None
+        return self._ensure_manual_contacts_included(cached_contacts, limit)
+
+    @staticmethod
+    def _merge_rows(rows: list[dict], extra_rows: list[dict]) -> list[dict]:
+        if not extra_rows:
+            return rows
+        seen = {row.get("contact_hash") for row in rows}
+        combined = list(rows)
+        for row in extra_rows:
+            contact_hash = row.get("contact_hash")
+            if contact_hash and contact_hash not in seen:
+                seen.add(contact_hash)
+                combined.append(row)
+        return combined
+
+    @staticmethod
+    def _ensure_manual_contacts_included(
+        scored: list[ScoredContact], limit: int
+    ) -> list[ScoredContact]:
+        if not scored:
+            return scored
+
+        manual = [contact for contact in scored if contact.raw_metrics.get("manual_added")]
+        if not manual:
+            return scored[:limit]
+
+        top = scored[:limit]
+        top_hashes = {contact.contact_hash for contact in top}
+        for contact in manual:
+            if contact.contact_hash not in top_hashes:
+                top.append(contact)
+
+        if len(top) <= limit:
+            return top
+
+        manual_hashes = {contact.contact_hash for contact in manual}
+        top_sorted = sorted(top, key=lambda contact: contact.vip_score, reverse=True)
+        manual_items = [contact for contact in top_sorted if contact.contact_hash in manual_hashes]
+        non_manual_items = [
+            contact for contact in top_sorted if contact.contact_hash not in manual_hashes
+        ]
+
+        if len(manual_items) >= limit:
+            return manual_items[:limit]
+
+        return manual_items + non_manual_items[: max(0, limit - len(manual_items))]
 
     async def _apply_identities(self, user_id: str, contacts: list[ScoredContact]) -> None:
         if not contacts:
             return
 
         contact_hashes = [contact.contact_hash for contact in contacts]
-        identity_rows = await ContactIdentityRepository.fetch_identities(
-            user_id, contact_hashes
-        )
+        identity_rows = await ContactIdentityRepository.fetch_identities(user_id, contact_hashes)
 
         for contact in contacts:
             identity = identity_rows.get(contact.contact_hash)
@@ -301,9 +374,7 @@ class ScoringService:
                     email_encrypted = email_encrypted.tobytes()
                 if isinstance(display_name_encrypted, memoryview):
                     display_name_encrypted = display_name_encrypted.tobytes()
-                contact.email = (
-                    decrypt_data(email_encrypted) if email_encrypted else contact.email
-                )
+                contact.email = decrypt_data(email_encrypted) if email_encrypted else contact.email
                 contact.display_name = (
                     decrypt_data(display_name_encrypted)
                     if display_name_encrypted
@@ -317,16 +388,12 @@ class ScoringService:
                     error=str(exc),
                 )
 
-    async def _hydrate_contacts(
-        self, user_id: str, contacts: list[AggregatedContact]
-    ) -> None:
+    async def _hydrate_contacts(self, user_id: str, contacts: list[AggregatedContact]) -> None:
         if not contacts:
             return
 
         contact_hashes = [contact.contact_hash for contact in contacts]
-        identity_rows = await ContactIdentityRepository.fetch_identities(
-            user_id, contact_hashes
-        )
+        identity_rows = await ContactIdentityRepository.fetch_identities(user_id, contact_hashes)
         updates: list[tuple[str, str | None, bool]] = []
 
         for contact in contacts:
@@ -340,9 +407,7 @@ class ScoringService:
                     email_encrypted = email_encrypted.tobytes()
                 if isinstance(display_name_encrypted, memoryview):
                     display_name_encrypted = display_name_encrypted.tobytes()
-                contact.email = (
-                    decrypt_data(email_encrypted) if email_encrypted else contact.email
-                )
+                contact.email = decrypt_data(email_encrypted) if email_encrypted else contact.email
                 contact.display_name = (
                     decrypt_data(display_name_encrypted)
                     if display_name_encrypted
@@ -384,6 +449,9 @@ class ScoringService:
             first_contact_at=row.get("first_contact_at"),
             last_contact_at=row.get("last_contact_at"),
             email_count_30d=row.get("email_count_30d", 0),
+            email_count_7d=row.get("email_count_7d", 0),
+            email_count_8_30d=row.get("email_count_8_30d", 0),
+            email_count_31_90d=row.get("email_count_31_90d", 0),
             inbound_count_30d=row.get("inbound_count_30d", 0),
             outbound_count_30d=row.get("outbound_count_30d", 0),
             direct_email_count=row.get("direct_email_count", 0),
@@ -409,6 +477,7 @@ class ScoringService:
             initiation_score=row.get("initiation_score", 0.5) or 0.5,
             email_domain=row.get("email_domain"),
             is_shared_inbox=row.get("is_shared_inbox") or False,
+            manual_added=row.get("manual_added") or False,
         )
 
     def _score_contact(
@@ -416,6 +485,7 @@ class ScoringService:
         contact: AggregatedContact,
         user_domain: str | None,
         is_custom_domain: bool,
+        domain_scoring_enabled: bool,
     ) -> ScoredContact | None:
         should_exclude, exclude_reason = self._should_exclude(contact)
         if should_exclude:
@@ -452,7 +522,7 @@ class ScoringService:
             score = self._apply_multi_source_boost(contact, score)
         score = self._apply_edge_cases(contact, scores, score)
         score = self._apply_penalties(contact, scores, score)
-        if settings.VIP_DOMAIN_SCORING_ENABLED:
+        if domain_scoring_enabled:
             score = self._apply_domain_adjustments(contact, score, user_domain, is_custom_domain)
         if settings.VIP_SCORING_REFINEMENTS_ENABLED:
             score = self._apply_age_decay(contact, score)
@@ -460,6 +530,9 @@ class ScoringService:
 
         raw_metrics = {
             "email_count_30d": contact.email_count_30d,
+            "email_count_7d": contact.email_count_7d,
+            "email_count_8_30d": contact.email_count_8_30d,
+            "email_count_31_90d": contact.email_count_31_90d,
             "inbound_count_30d": contact.inbound_count_30d,
             "outbound_count_30d": contact.outbound_count_30d,
             "direct_email_count": contact.direct_email_count,
@@ -484,6 +557,7 @@ class ScoringService:
             ),
             "email_domain": contact.email_domain,
             "is_shared_inbox": contact.is_shared_inbox,
+            "manual_added": contact.manual_added,
         }
 
         return ScoredContact(
@@ -499,6 +573,8 @@ class ScoringService:
     def _should_exclude(self, contact: AggregatedContact) -> tuple[bool, str | None]:
         interactions = contact.email_count_30d + contact.meeting_count_30d
         if interactions < 2:
+            if contact.manual_added:
+                return False, None
             return True, "insufficient_interactions"
 
         if (
@@ -631,6 +707,9 @@ class ScoringService:
             multiplier *= 1.10
         elif contact.starred_email_count >= 1:
             multiplier *= 1.05
+        if contact.cc_email_count >= 3:
+            cc_bonus = min(contact.cc_email_count, 12) * 0.004
+            multiplier *= 1.0 + cc_bonus
         if contact.consistency_score >= 0.7 and contact.email_count_30d >= 15:
             multiplier *= 1.06
         if contact.meetings_they_organized >= 2:
@@ -659,6 +738,7 @@ class ScoringService:
             and scores["meeting"] >= 0.25
         ):
             score *= 1.2
+        score = self._apply_recency_bucket_boost(contact, score)
         if contact.first_contact_at:
             days_since_first = (datetime.now(UTC) - contact.first_contact_at).days
             if (
@@ -676,6 +756,17 @@ class ScoringService:
                 score *= 1.10
         if 1 <= contact.email_count_30d <= 5 and contact.starred_email_count >= 1:
             score *= 1.12
+        return score
+
+    def _apply_recency_bucket_boost(self, contact: AggregatedContact, score: float) -> float:
+        if contact.email_count_30d > 3:
+            return score
+        if contact.email_count_7d > 0:
+            return score * 1.12
+        if contact.email_count_8_30d > 0:
+            return score * 1.06
+        if contact.email_count_31_90d > 0:
+            return score * 1.03
         return score
 
     def _apply_penalties(

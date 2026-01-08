@@ -226,6 +226,76 @@ class FastRedisClient:
             logger.error("Redis LIST pop failed", key=key[:30], error=str(e))
             return None
 
+    async def pop_to_inflight(
+        self, source_key: str, inflight_key: str, timeout: int = 0
+    ) -> str | None:
+        """
+        Pop a value from a list and push to an in-flight list (acked queue).
+
+        Uses BRPOPLPUSH for blocking behavior to avoid losing jobs on worker crash.
+        """
+        try:
+            await self._ensure_initialized()
+            if timeout > 0:
+                payload = await self.client.brpoplpush(source_key, inflight_key, timeout=timeout)
+            else:
+                payload = await self.client.rpoplpush(source_key, inflight_key)
+            return payload
+        except Exception as e:
+            logger.error(
+                "Redis LIST inflight pop failed",
+                source_key=source_key[:30],
+                inflight_key=inflight_key[:30],
+                error=str(e),
+            )
+            return None
+
+    async def ack_from_inflight(self, inflight_key: str, value: str) -> bool:
+        """Remove a processed item from the in-flight list."""
+        try:
+            await self._ensure_initialized()
+            removed = await self.client.lrem(inflight_key, 0, value)
+            return removed > 0
+        except Exception as e:
+            logger.error(
+                "Redis inflight ack failed",
+                inflight_key=inflight_key[:30],
+                value_preview=value[:30],
+                error=str(e),
+            )
+            return False
+
+    async def requeue_from_inflight(
+        self, inflight_key: str, destination_key: str, value: str
+    ) -> bool:
+        """Move an item from the in-flight list back to the main queue."""
+        try:
+            await self._ensure_initialized()
+            async with self.client.pipeline(transaction=True) as pipe:
+                pipe.lrem(inflight_key, 0, value)
+                pipe.lpush(destination_key, value)
+                results = await pipe.execute()
+            return bool(results and results[-1] is not None)
+        except Exception as e:
+            logger.error(
+                "Redis inflight requeue failed",
+                inflight_key=inflight_key[:30],
+                destination_key=destination_key[:30],
+                value_preview=value[:30],
+                error=str(e),
+            )
+            return False
+
+    async def list_range(self, key: str, start: int = 0, end: int = -1) -> list[str]:
+        """Return a range of values from a list."""
+        try:
+            await self._ensure_initialized()
+            result = await self.client.lrange(key, start, end)
+            return [str(item) for item in result] if result else []
+        except Exception as e:
+            logger.error("Redis LRANGE failed", key=key[:30], error=str(e))
+            return []
+
 
 # Global instance
 fast_redis = FastRedisClient()

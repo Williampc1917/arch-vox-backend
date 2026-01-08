@@ -104,3 +104,33 @@ async def enqueue_vip_backfill_job(
         trigger_reason=trigger_reason,
     )
     return job
+
+
+async def enqueue_existing_vip_job(
+    job: VipBackfillJob, trigger_reason: str = "manual_retry"
+) -> None:
+    """
+    Enqueue an existing VIP backfill job ID without creating a new job row.
+    """
+    await fast_redis.initialize()
+    queue_name = settings.VIP_BACKFILL_QUEUE_NAME
+    queued = await fast_redis.push_to_list(queue_name, job.id, left=True)
+
+    if not queued:
+        await VipRepository.mark_job_failed(job.id, "Failed to queue retry job in Redis")
+        logger.error(
+            "Failed to enqueue existing VIP backfill job",
+            user_id=job.user_id,
+            job_id=job.id,
+            queue=queue_name,
+            trigger_reason=trigger_reason,
+        )
+        raise VipSchedulerError("Existing VIP backfill job could not be enqueued")
+
+    logger.info(
+        "Existing VIP backfill job enqueued",
+        user_id=job.user_id,
+        job_id=job.id,
+        queue=queue_name,
+        trigger_reason=trigger_reason,
+    )

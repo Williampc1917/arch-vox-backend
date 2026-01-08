@@ -173,16 +173,28 @@ class GmailConnectionService:
             token_response = await exchange_oauth_code(authorization_code)
 
             permission_validation = validate_google_token_permissions(token_response)
-            if not permission_validation.get("gmail_valid", False):
+            missing_gmail = not permission_validation.get("gmail_valid", False)
+            missing_calendar = not permission_validation.get("calendar_valid", False)
+            if missing_gmail or missing_calendar:
                 logger.warning(
-                    "Gmail scopes missing from OAuth token",
+                    "Required OAuth scopes missing",
                     user_id=user_id,
-                    missing_scopes=permission_validation.get("missing_gmail_scopes", []),
+                    missing_gmail_scopes=permission_validation.get("missing_gmail_scopes", []),
+                    missing_calendar_scopes=permission_validation.get(
+                        "missing_calendar_scopes", []
+                    ),
                 )
+                if missing_gmail and missing_calendar:
+                    error_code = "missing_required_scopes"
+                elif missing_calendar:
+                    error_code = "missing_calendar_scopes"
+                else:
+                    error_code = "missing_gmail_scopes"
+
                 raise GmailConnectionError(
-                    "Missing required Gmail permissions",
+                    "Missing required Gmail and Calendar permissions",
                     user_id=user_id,
-                    error_code="missing_gmail_scopes",
+                    error_code=error_code,
                 )
 
             # ✅ FIX: Store tokens and update user status in single transaction
@@ -349,6 +361,17 @@ class GmailConnectionService:
             except Exception as exc:
                 logger.warning(
                     "Failed to clear contact identities after Gmail disconnect",
+                    user_id=user_id,
+                    error=str(exc),
+                )
+
+            try:
+                from app.features.vip_onboarding.repository.vip_repository import VipRepository
+
+                await VipRepository.delete_user_vip_data(user_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear VIP metadata after Gmail disconnect",
                     user_id=user_id,
                     error=str(exc),
                 )

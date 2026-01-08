@@ -79,9 +79,7 @@ async def run_vip_identity_backfill() -> None:
             continue
 
         try:
-            await enqueue_vip_backfill_job(
-                user_id, trigger_reason="identity_backfill", force=True
-            )
+            await enqueue_vip_backfill_job(user_id, trigger_reason="identity_backfill", force=True)
             queued += 1
         except VipSchedulerError as exc:
             failures += 1

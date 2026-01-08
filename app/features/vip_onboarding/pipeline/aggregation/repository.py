@@ -9,7 +9,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.db.helpers import execute_query, execute_transaction, fetch_all
+from app.db.helpers import execute_transaction, fetch_all
+from app.db.pool import get_db_connection
 from app.infrastructure.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -54,6 +55,9 @@ class ContactAggregate:
     email: str | None
     display_name: str | None
     email_count_30d: int
+    email_count_7d: int
+    email_count_8_30d: int
+    email_count_31_90d: int
     inbound_count_30d: int
     outbound_count_30d: int
     direct_email_count: int
@@ -154,8 +158,8 @@ class ContactAggregationRepository:
             WHERE user_id = %s
               AND start_time >= %s
               AND start_time <= %s
-              AND user_response = 'accepted'
               AND event_type = 'default'
+              AND (user_response = 'accepted' OR user_is_organizer = true)
         """
 
         rows = await fetch_all(query, (user_id, window_start, window_end))
@@ -183,6 +187,7 @@ class ContactAggregationRepository:
         query = """
             INSERT INTO contacts (
                 user_id, contact_hash, email, display_name, email_count_30d,
+                email_count_7d, email_count_8_30d, email_count_31_90d,
                 inbound_count_30d, outbound_count_30d, direct_email_count, cc_email_count,
                 thread_count_30d, avg_thread_depth, attachment_email_count,
                 starred_email_count, important_email_count, reply_rate_30d,
@@ -195,6 +200,7 @@ class ContactAggregationRepository:
             )
             VALUES (
                 %(user_id)s, %(contact_hash)s, %(email)s, %(display_name)s, %(email_count_30d)s,
+                %(email_count_7d)s, %(email_count_8_30d)s, %(email_count_31_90d)s,
                 %(inbound_count_30d)s, %(outbound_count_30d)s, %(direct_email_count)s, %(cc_email_count)s,
                 %(thread_count_30d)s, %(avg_thread_depth)s, %(attachment_email_count)s,
                 %(starred_email_count)s, %(important_email_count)s, %(reply_rate_30d)s,
@@ -210,6 +216,9 @@ class ContactAggregationRepository:
                 email = EXCLUDED.email,
                 display_name = EXCLUDED.display_name,
                 email_count_30d = EXCLUDED.email_count_30d,
+                email_count_7d = EXCLUDED.email_count_7d,
+                email_count_8_30d = EXCLUDED.email_count_8_30d,
+                email_count_31_90d = EXCLUDED.email_count_31_90d,
                 inbound_count_30d = EXCLUDED.inbound_count_30d,
                 outbound_count_30d = EXCLUDED.outbound_count_30d,
                 direct_email_count = EXCLUDED.direct_email_count,
@@ -237,9 +246,12 @@ class ContactAggregationRepository:
                 initiation_score = EXCLUDED.initiation_score,
                 updated_at = NOW()
         """
+        payload = [aggregate.__dict__ for aggregate in aggregates]
+        if not payload:
+            return
 
-        for aggregate in aggregates:
-            await execute_query(query, aggregate.__dict__)
+        async with await get_db_connection() as conn:
+            await conn.executemany(query, payload)
 
     @classmethod
     async def fetch_contacts(cls, user_id: str, limit: int = 50) -> list[dict]:
@@ -252,6 +264,9 @@ class ContactAggregationRepository:
                 first_contact_at,
                 last_contact_at,
                 email_count_30d,
+                email_count_7d,
+                email_count_8_30d,
+                email_count_31_90d,
                 inbound_count_30d,
                 outbound_count_30d,
                 direct_email_count,
@@ -277,6 +292,7 @@ class ContactAggregationRepository:
                 initiation_score,
                 email_domain,
                 is_shared_inbox,
+                manual_added,
                 vip_score,
                 confidence_score
             FROM contacts
@@ -285,6 +301,62 @@ class ContactAggregationRepository:
                 COALESCE(vip_score, 0) DESC,
                 weighted_meeting_score DESC,
                 email_count_30d DESC
+            LIMIT %s
+        """
+
+        return await fetch_all(query, (user_id, limit))
+
+    @classmethod
+    async def fetch_contacts_for_rescore(cls, user_id: str, limit: int = 50) -> list[dict]:
+        """
+        Fetch contacts ordered by raw activity metrics for rescoring.
+        """
+        query = """
+            SELECT
+                id,
+                contact_hash,
+                email,
+                display_name,
+                first_contact_at,
+                last_contact_at,
+                email_count_30d,
+                email_count_7d,
+                email_count_8_30d,
+                email_count_31_90d,
+                inbound_count_30d,
+                outbound_count_30d,
+                direct_email_count,
+                cc_email_count,
+                thread_count_30d,
+                avg_thread_depth,
+                attachment_email_count,
+                starred_email_count,
+                important_email_count,
+                reply_rate_30d,
+                median_response_hours,
+                off_hours_ratio,
+                threads_they_started,
+                threads_you_started,
+                meeting_count_30d,
+                total_meeting_minutes,
+                recurring_meeting_count,
+                meetings_you_organized,
+                meetings_they_organized,
+                weighted_meeting_score,
+                meeting_recurrence_score,
+                consistency_score,
+                initiation_score,
+                email_domain,
+                is_shared_inbox,
+                manual_added,
+                vip_score,
+                confidence_score
+            FROM contacts
+            WHERE user_id = %s
+            ORDER BY
+                weighted_meeting_score DESC,
+                email_count_30d DESC,
+                last_contact_at DESC NULLS LAST
             LIMIT %s
         """
 
@@ -304,14 +376,17 @@ class ContactAggregationRepository:
         return rows[0]["total"]
 
     @classmethod
-    async def ensure_contact_exists(cls, user_id: str, contact_hash: str) -> None:
+    async def ensure_contact_exists(
+        cls, user_id: str, contact_hash: str, manual_added: bool = False
+    ) -> None:
         query = """
-            INSERT INTO contacts (user_id, contact_hash)
-            VALUES (%s, %s)
-            ON CONFLICT (user_id, contact_hash) DO NOTHING
+            INSERT INTO contacts (user_id, contact_hash, manual_added)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, contact_hash)
+            DO UPDATE SET manual_added = contacts.manual_added OR EXCLUDED.manual_added
         """
 
-        await execute_query(query, (user_id, contact_hash))
+        await execute_query(query, (user_id, contact_hash, manual_added))
 
     @classmethod
     async def update_contact_attributes(
@@ -338,3 +413,17 @@ class ContactAggregationRepository:
 
         if queries:
             await execute_transaction(queries)
+
+    @classmethod
+    async def clear_contact_scores(cls, user_id: str) -> None:
+        """
+        Clear cached scoring fields so the next VIP fetch recomputes scores.
+        """
+        query = """
+            UPDATE contacts
+            SET vip_score = NULL,
+                confidence_score = NULL,
+                updated_at = NOW()
+            WHERE user_id = %s
+        """
+        await execute_query(query, (user_id,))

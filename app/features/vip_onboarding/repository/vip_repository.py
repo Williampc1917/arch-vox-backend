@@ -34,7 +34,7 @@ class VipRepository:
     """Persistence helpers backing the VIP backfill job."""
 
     JOB_SELECT_COLUMNS = """
-        id, user_id, status, attempts, trigger_reason,
+        id, user_id, status, attempts, retry_count, trigger_reason,
         created_at, started_at, completed_at, error_message
     """
 
@@ -48,6 +48,7 @@ class VipRepository:
             user_id=str(row["user_id"]),
             status=row["status"],
             attempts=row["attempts"],
+            retry_count=row.get("retry_count", 0),
             trigger_reason=row.get("trigger_reason"),
             created_at=row["created_at"],
             started_at=row.get("started_at"),
@@ -55,7 +56,6 @@ class VipRepository:
             error_message=row.get("error_message"),
         )
 
-    @classmethod
     @classmethod
     async def load_latest_job_for_user(cls, user_id: str) -> VipBackfillJob | None:
         """Fetch the most recent job for a user."""
@@ -88,9 +88,9 @@ class VipRepository:
 
         insert_query = f"""
             INSERT INTO user_vip_backfill_jobs (
-                user_id, status, attempts, trigger_reason
+                user_id, status, attempts, retry_count, trigger_reason
             )
-            VALUES (%s, 'pending', %s, %s)
+            VALUES (%s, 'pending', %s, 0, %s)
             RETURNING {cls.JOB_SELECT_COLUMNS}
         """
 
@@ -160,6 +160,23 @@ class VipRepository:
         logger.warning("VIP backfill job failed", job_id=job_id, error=truncated_error)
 
     @classmethod
+    async def reset_job_pending(cls, job_id: str) -> None:
+        """Reset a stuck job back to pending so it can be retried."""
+
+        query = """
+            UPDATE user_vip_backfill_jobs
+            SET status = 'pending',
+                retry_count = retry_count + 1,
+                started_at = NULL,
+                completed_at = NULL,
+                error_message = NULL
+            WHERE id = %s
+        """
+
+        await execute_query(query, (job_id,))
+        logger.warning("VIP backfill job reset to pending", job_id=job_id)
+
+    @classmethod
     async def record_email_metadata(
         cls, user_id: str, records: Iterable[EmailMetadataRecord]
     ) -> None:
@@ -214,6 +231,71 @@ class VipRepository:
         )
 
     @classmethod
+    async def replace_email_metadata(
+        cls, user_id: str, window_start: datetime, records: Iterable[EmailMetadataRecord]
+    ) -> None:
+        """
+        Replace email metadata within the provided window in a single transaction.
+        """
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=UTC)
+
+        payload = [
+            (
+                user_id,
+                record.message_id,
+                record.thread_id or "",
+                record.from_contact_hash,
+                record.to_contact_hash,
+                record.internal_timestamp,
+                record.direction,
+                record.cc_contact_hashes,
+                record.is_reply,
+                record.has_attachment,
+                record.is_starred,
+                record.is_important,
+                record.is_promotional,
+                record.is_social,
+                record.subject_length,
+                record.hour_of_day,
+                record.day_of_week,
+            )
+            for record in records
+        ]
+
+        delete_query = """
+            DELETE FROM email_metadata
+            WHERE user_id = %s
+              AND timestamp >= %s
+        """
+
+        insert_query = """
+            INSERT INTO email_metadata (
+                user_id, message_id, thread_id,
+                from_contact_hash, to_contact_hash,
+                timestamp, direction,
+                cc_contact_hashes, is_reply, has_attachment,
+                is_starred, is_important, is_promotional, is_social,
+                subject_length, hour_of_day, day_of_week
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, message_id) DO NOTHING
+        """
+
+        async with await get_db_connection() as conn:
+            async with conn.transaction():
+                await conn.execute(delete_query, (user_id, window_start))
+                if payload:
+                    await conn.executemany(insert_query, payload)
+
+        logger.info(
+            "Email metadata window replaced",
+            user_id=user_id,
+            window_start=window_start.isoformat(),
+            inserted=len(payload),
+        )
+
+    @classmethod
     async def record_event_metadata(
         cls, user_id: str, records: Iterable[CalendarEventRecord]
     ) -> None:
@@ -262,6 +344,65 @@ class VipRepository:
         )
 
     @classmethod
+    async def replace_event_metadata(
+        cls, user_id: str, window_start: datetime, records: Iterable[CalendarEventRecord]
+    ) -> None:
+        """
+        Replace event metadata within the provided window in a single transaction.
+        """
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=UTC)
+
+        payload = [
+            (
+                user_id,
+                record.event_id,
+                record.start_time,
+                record.end_time,
+                record.attendee_hashes,
+                record.duration_minutes,
+                record.is_recurring,
+                record.recurrence_rule,
+                record.organizer_hash,
+                record.user_is_organizer,
+                record.user_response,
+                record.is_one_on_one,
+                record.event_type,
+            )
+            for record in records
+        ]
+
+        delete_query = """
+            DELETE FROM events_metadata
+            WHERE user_id = %s
+              AND start_time >= %s
+        """
+
+        insert_query = """
+            INSERT INTO events_metadata (
+                user_id, event_id, start_time, end_time, attendee_contact_hashes,
+                duration_minutes, is_recurring, recurrence_rule,
+                organizer_hash, user_is_organizer, user_response,
+                is_one_on_one, event_type
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, event_id) DO NOTHING
+        """
+
+        async with await get_db_connection() as conn:
+            async with conn.transaction():
+                await conn.execute(delete_query, (user_id, window_start))
+                if payload:
+                    await conn.executemany(insert_query, payload)
+
+        logger.info(
+            "Event metadata window replaced",
+            user_id=user_id,
+            window_start=window_start.isoformat(),
+            inserted=len(payload),
+        )
+
+    @classmethod
     async def prune_recent_metadata(cls, user_id: str, window_start: datetime) -> None:
         """
         Remove metadata in the provided window before inserting a fresh slice.
@@ -285,3 +426,18 @@ class VipRepository:
         logger.info(
             "Pruned VIP metadata window", user_id=user_id, window_start=window_start.isoformat()
         )
+
+    @classmethod
+    async def delete_user_vip_data(cls, user_id: str) -> None:
+        """
+        Delete all VIP-related metadata and contacts for a user.
+        """
+        queries = [
+            ("DELETE FROM vip_list WHERE user_id = %s", (user_id,)),
+            ("DELETE FROM contacts WHERE user_id = %s", (user_id,)),
+            ("DELETE FROM email_metadata WHERE user_id = %s", (user_id,)),
+            ("DELETE FROM events_metadata WHERE user_id = %s", (user_id,)),
+        ]
+
+        await execute_transaction(queries)
+        logger.info("Deleted VIP data for user", user_id=user_id)

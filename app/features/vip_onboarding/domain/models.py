@@ -81,6 +81,7 @@ class VipBackfillJob:
     user_id: str
     status: str
     attempts: int
+    retry_count: int
     trigger_reason: str | None
     created_at: datetime
     started_at: datetime | None

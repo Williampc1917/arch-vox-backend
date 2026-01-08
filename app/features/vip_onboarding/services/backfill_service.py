@@ -22,6 +22,7 @@ from app.features.vip_onboarding.repository.contact_identity_repository import (
 )
 from app.config import settings
 from app.features.vip_onboarding.repository.vip_repository import VipRepository
+from app.infrastructure.audit import audit_logger
 from app.infrastructure.observability.logging import get_logger
 from app.models.domain.oauth_domain import OAuthToken
 from app.security.hashing import hash_email
@@ -53,6 +54,12 @@ class VipBackfillService:
     GMAIL_UNIQUE_CONTACT_CAP = 300
     GMAIL_MAX_PAGES = 10
     CALENDAR_MAX_EVENTS = 1000
+    GMAIL_METADATA_HEADERS = [
+        "List-Unsubscribe",
+        "List-Id",
+        "Precedence",
+        "Auto-Submitted",
+    ]
 
     async def run(self, job: VipBackfillJob) -> None:
         """Collect email + calendar metadata for the given job."""
@@ -71,18 +78,15 @@ class VipBackfillService:
         calendar_window_end = now + timedelta(days=self.CALENDAR_LOOKAHEAD_DAYS)
 
         email_window_start = now - timedelta(days=lookback_days)
-        await VipRepository.prune_recent_metadata(job.user_id, email_window_start)
 
-        email_records, email_identities, unique_contact_count = (
-            await self._collect_email_metadata(
-                job,
-                tokens,
-                user_email,
-                email_window_start,
-                lookback_days,
-                enable_prefilter=settings.VIP_PREFILTER_ENABLED,
-                collect_identities=settings.VIP_IDENTITY_ENABLED,
-            )
+        email_records, email_identities, unique_contact_count = await self._collect_email_metadata(
+            job,
+            tokens,
+            user_email,
+            email_window_start,
+            lookback_days,
+            enable_prefilter=settings.VIP_PREFILTER_ENABLED,
+            collect_identities=settings.VIP_IDENTITY_ENABLED,
         )
 
         if (
@@ -92,8 +96,6 @@ class VipBackfillService:
             lookback_days = self.EXTENDED_EMAIL_LOOKBACK_DAYS
             calendar_lookback_days = self.EXTENDED_CALENDAR_LOOKBACK_DAYS
             email_window_start = now - timedelta(days=lookback_days)
-
-            await VipRepository.prune_recent_metadata(job.user_id, email_window_start)
 
             email_records, email_identities, unique_contact_count = (
                 await self._collect_email_metadata(
@@ -107,7 +109,7 @@ class VipBackfillService:
                 )
             )
 
-        await self._persist_email_records(job.user_id, email_records)
+        await VipRepository.replace_email_metadata(job.user_id, email_window_start, email_records)
 
         event_window_start = now - timedelta(days=calendar_lookback_days)
         event_records, event_identities = await self._collect_event_metadata(
@@ -118,7 +120,7 @@ class VipBackfillService:
             calendar_window_end,
             collect_identities=settings.VIP_IDENTITY_ENABLED,
         )
-        await self._persist_event_records(job.user_id, event_records)
+        await VipRepository.replace_event_metadata(job.user_id, event_window_start, event_records)
         if settings.VIP_IDENTITY_ENABLED:
             await self._persist_contact_identities(
                 job.user_id, self._merge_identities(email_identities, event_identities)
@@ -142,6 +144,9 @@ class VipBackfillService:
 
         if not tokens.has_gmail_access():
             raise VipBackfillError("OAuth token missing Gmail scopes")
+
+        if not tokens.has_calendar_access():
+            raise VipBackfillError("OAuth token missing Calendar scopes")
 
         return tokens
 
@@ -170,9 +175,7 @@ class VipBackfillService:
             try:
                 query_parts = [f"newer_than:{lookback_days}d"]
                 if enable_prefilter:
-                    query_parts.append(
-                        "-category:promotions -category:social -category:forums"
-                    )
+                    query_parts.append("-category:promotions -category:social -category:forums")
                     query_parts.append('-from:(noreply OR "no-reply" OR "do-not-reply")')
 
                 messages, _, next_page_token = await google_gmail_service.list_messages(
@@ -181,6 +184,7 @@ class VipBackfillService:
                     query=" ".join(query_parts),
                     page_token=page_token,
                     message_format="metadata",
+                    metadata_headers=self.GMAIL_METADATA_HEADERS,
                 )
             except GoogleGmailError as exc:
                 raise VipBackfillError(f"Gmail API error: {exc}") from exc
@@ -245,14 +249,22 @@ class VipBackfillService:
                     if self._is_automated_sender(headers):
                         continue
 
+                direction = self._determine_direction(from_email, user_email)
+                normalized_from = (from_email or "").strip().lower()
+                normalized_to = (primary_to or "").strip().lower() if primary_to else ""
+                if direction == "in" and not normalized_from:
+                    continue
+                if direction == "out" and not normalized_to:
+                    continue
+
                 record = EmailMetadataRecord(
                     user_id=job.user_id,
                     message_id=message.id or "",
                     thread_id=message.thread_id or "",
-                    from_contact_hash=hash_email(from_email),
-                    to_contact_hash=hash_email(primary_to),
+                    from_contact_hash=hash_email(normalized_from),
+                    to_contact_hash=hash_email(normalized_to),
                     internal_timestamp=timestamp,
-                    direction=self._determine_direction(from_email, user_email),
+                    direction=direction,
                     cc_contact_hashes=cc_hashes,
                     is_reply=self._is_reply(headers),
                     has_attachment=bool(getattr(message, "has_attachments", lambda: False)()),
@@ -337,7 +349,7 @@ class VipBackfillService:
 
                 attendee_emails = []
                 attendee_names = []
-                for attendee in (event.attendees or []):
+                for attendee in event.attendees or []:
                     email = (attendee.get("email") or "").strip().lower()
                     if not email:
                         continue
@@ -371,9 +383,7 @@ class VipBackfillService:
 
                 if collect_identities:
                     for email, name in zip(attendee_emails, attendee_names, strict=False):
-                        self._maybe_add_identity(
-                            identities, email, name, user_email=user_email
-                        )
+                        self._maybe_add_identity(identities, email, name, user_email=user_email)
 
                 if len(records) >= self.CALENDAR_MAX_EVENTS:
                     break
@@ -391,32 +401,6 @@ class VipBackfillService:
             event_count=len(records),
         )
         return records, identities
-
-    async def _persist_email_records(
-        self, user_id: str, records: Iterable[EmailMetadataRecord]
-    ) -> None:
-        batch: list[EmailMetadataRecord] = []
-        for record in records:
-            batch.append(record)
-            if len(batch) >= self.DB_BATCH_SIZE:
-                await VipRepository.record_email_metadata(user_id, batch)
-                batch.clear()
-
-        if batch:
-            await VipRepository.record_email_metadata(user_id, batch)
-
-    async def _persist_event_records(
-        self, user_id: str, records: Iterable[CalendarEventRecord]
-    ) -> None:
-        batch: list[CalendarEventRecord] = []
-        for record in records:
-            batch.append(record)
-            if len(batch) >= self.DB_BATCH_SIZE:
-                await VipRepository.record_event_metadata(user_id, batch)
-                batch.clear()
-
-        if batch:
-            await VipRepository.record_event_metadata(user_id, batch)
 
     async def _persist_contact_identities(
         self,
@@ -436,7 +420,18 @@ class VipBackfillService:
                 )
             )
 
+        if not records:
+            return
+
         await ContactIdentityRepository.upsert_identities(records)
+        await audit_logger.log(
+            user_id=user_id,
+            action="vip_contact_identities_backfilled",
+            resource_type="vip_contact_identity",
+            resource_count=len(records),
+            pii_fields=["email", "display_name"],
+            metadata={"source": "vip_backfill"},
+        )
 
     def _determine_direction(self, from_email: str | None, user_email: str) -> str:
         if not from_email:

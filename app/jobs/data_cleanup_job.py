@@ -257,31 +257,55 @@ class DataCleanupJob:
         cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
         total_deleted = 0
+        deleted_email_metadata = 0
+        deleted_event_metadata = 0
+        deleted_contacts = 0
 
-        # Note: For now, we don't auto-delete OAuth tokens or VIP selections
-        # based on age alone (only when user requests deletion).
-        # This is because these are user preferences, not cached data.
-        #
-        # If you add features with cached data (email bodies, calendar events,
-        # etc.), add deletion logic here.
-        #
-        # Example:
-        # async with db_pool.connection() as conn:
-        #     async with conn.cursor() as cursor:
-        #         await cursor.execute(
-        #             """
-        #             DELETE FROM email_cache
-        #             WHERE created_at < %s
-        #             """,
-        #             (cutoff_date,),
-        #         )
-        #         total_deleted += cursor.rowcount
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    DELETE FROM email_metadata
+                    WHERE timestamp < %s
+                    """,
+                    (cutoff_date,),
+                )
+                deleted_email_metadata = cursor.rowcount
+
+                await cursor.execute(
+                    """
+                    DELETE FROM events_metadata
+                    WHERE start_time < %s
+                    """,
+                    (cutoff_date,),
+                )
+                deleted_event_metadata = cursor.rowcount
+
+                await cursor.execute(
+                    """
+                    DELETE FROM contacts c
+                    WHERE COALESCE(c.last_contact_at, c.created_at) < %s
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM vip_list v
+                          WHERE v.contact_id = c.id
+                            AND v.deleted_at IS NULL
+                      )
+                    """,
+                    (cutoff_date,),
+                )
+                deleted_contacts = cursor.rowcount
+
+        total_deleted = deleted_email_metadata + deleted_event_metadata + deleted_contacts
 
         logger.info(
             "Old cached data cleanup",
             retention_days=retention_days,
             cutoff_date=cutoff_date.isoformat(),
             deleted_count=total_deleted,
+            deleted_email_metadata=deleted_email_metadata,
+            deleted_event_metadata=deleted_event_metadata,
+            deleted_contacts=deleted_contacts,
         )
 
         return total_deleted

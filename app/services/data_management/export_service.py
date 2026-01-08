@@ -200,9 +200,14 @@ class DataExportService:
                         c.contact_hash,
                         c.display_name,
                         v.created_at,
-                        v.deleted_at
+                        v.deleted_at,
+                        ci.email_encrypted,
+                        ci.display_name_encrypted
                     FROM vip_list v
                     JOIN contacts c ON v.contact_id = c.id
+                    LEFT JOIN contact_identities ci
+                        ON ci.user_id = v.user_id
+                       AND ci.contact_hash = c.contact_hash
                     WHERE v.user_id = %s
                     ORDER BY v.rank
                     """,
@@ -212,11 +217,36 @@ class DataExportService:
 
         vips = []
         for row in rows:
+            email_encrypted = row[5]
+            display_name_encrypted = row[6]
+            if isinstance(email_encrypted, memoryview):
+                email_encrypted = email_encrypted.tobytes()
+            if isinstance(display_name_encrypted, memoryview):
+                display_name_encrypted = display_name_encrypted.tobytes()
+
+            email = None
+            display_name = row[2]
+            try:
+                email = decrypt_data(email_encrypted) if email_encrypted else None
+                identity_display_name = (
+                    decrypt_data(display_name_encrypted) if display_name_encrypted else None
+                )
+                if identity_display_name:
+                    display_name = identity_display_name
+            except EncryptionError as exc:
+                logger.warning(
+                    "Failed to decrypt VIP identity during export",
+                    user_id=user_id,
+                    contact_hash=row[1],
+                    error=str(exc),
+                )
+
             vips.append(
                 {
                     "rank": row[0],
                     "contact_hash": row[1],
-                    "display_name": row[2],
+                    "display_name": display_name,
+                    "email": email,
                     "selected_at": row[3].isoformat() if row[3] else None,
                     "status": "deleted" if row[4] else "active",
                     "deleted_at": row[4].isoformat() if row[4] else None,
@@ -226,7 +256,7 @@ class DataExportService:
         return {
             "vips": vips,
             "total_count": len(vips),
-            "note": "Contact hashes are pseudonymized for privacy (HMAC-SHA256).",
+            "note": "VIP identities are decrypted for portability. Contact hashes are pseudonymized for privacy (HMAC-SHA256).",
         }
 
     # =======================================================================

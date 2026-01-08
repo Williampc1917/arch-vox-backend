@@ -50,6 +50,7 @@ class VipMonitoringService:
                     FROM (
                         SELECT user_id, COUNT(*) AS contact_count
                         FROM contacts
+                        WHERE deleted_at IS NULL
                         GROUP BY user_id
                     ) AS counts
                     """
@@ -76,9 +77,7 @@ class VipMonitoringService:
 
         users_with_contacts = contacts_row.get("users_with_contacts") or 0
         users_with_vips = vip_row.get("users_with_vips") or 0
-        vip_selection_rate = (
-            (users_with_vips / users_with_contacts) if users_with_contacts else 0.0
-        )
+        vip_selection_rate = (users_with_vips / users_with_contacts) if users_with_contacts else 0.0
 
         metrics = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -99,9 +98,7 @@ class VipMonitoringService:
                 "users_with_contacts": users_with_contacts,
                 "rate": round(vip_selection_rate, 4),
             },
-            "audit_volume": {
-                "events_last_24h": audit_row.get("audit_events_24h") or 0
-            },
+            "audit_volume": {"events_last_24h": audit_row.get("audit_events_24h") or 0},
         }
 
         logger.info(

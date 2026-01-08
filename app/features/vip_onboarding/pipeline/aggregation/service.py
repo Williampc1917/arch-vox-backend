@@ -37,6 +37,9 @@ class _ThreadMessage:
 class _ContactWorkingSet:
     contact_hash: str
     email_count: int = 0
+    email_count_7d: int = 0
+    email_count_8_30d: int = 0
+    email_count_31_90d: int = 0
     inbound_count: int = 0
     outbound_count: int = 0
     cc_count: int = 0
@@ -88,10 +91,7 @@ class ContactAggregationService:
         )
 
         unique_contacts = self._count_unique_contacts(user_email_hash, emails, events)
-        if (
-            settings.VIP_LOOKBACK_EXPANSION_ENABLED
-            and unique_contacts < self.MIN_CONTACT_THRESHOLD
-        ):
+        if settings.VIP_LOOKBACK_EXPANSION_ENABLED and unique_contacts < self.MIN_CONTACT_THRESHOLD:
             email_window_start = now - timedelta(days=self.EXTENDED_EMAIL_LOOKBACK_DAYS)
             meeting_window_start = now - timedelta(days=self.EXTENDED_MEETING_LOOKBACK_DAYS)
             emails = await ContactAggregationRepository.fetch_email_metadata(
@@ -108,6 +108,7 @@ class ContactAggregationService:
             return 0
 
         await ContactAggregationRepository.upsert_contacts(aggregates.values())
+        await ContactAggregationRepository.clear_contact_scores(user_id)
         logger.info("Contacts aggregated", user_id=user_id, contact_count=len(aggregates))
         return len(aggregates)
 
@@ -127,6 +128,7 @@ class ContactAggregationService:
     ) -> dict[str, ContactAggregate]:
         contacts: dict[str, _ContactWorkingSet] = {}
         source_flags: defaultdict[str, set[str]] = defaultdict(set)
+        now = datetime.now(UTC)
 
         def ensure_contact(contact_hash: str) -> _ContactWorkingSet:
             if contact_hash not in contacts:
@@ -141,10 +143,15 @@ class ContactAggregationService:
             if not primary_hash:
                 continue
             contact = ensure_contact(primary_hash)
-            source_flags[primary_hash].add(
-                "gmail_in" if email.direction == "in" else "gmail_out"
-            )
+            source_flags[primary_hash].add("gmail_in" if email.direction == "in" else "gmail_out")
             contact.email_count += 1
+            days_since = max((now - email.timestamp).total_seconds() / 86400, 0)
+            if days_since <= 7:
+                contact.email_count_7d += 1
+            elif days_since <= 30:
+                contact.email_count_8_30d += 1
+            elif days_since <= 90:
+                contact.email_count_31_90d += 1
             contact.timestamps.append(email.timestamp)
             contact.thread_ids.add(email.thread_id)
             contact.thread_messages[email.thread_id].append(
@@ -169,9 +176,7 @@ class ContactAggregationService:
                 if not cc_hash or cc_hash == primary_hash:
                     continue
                 cc_contact = ensure_contact(cc_hash)
-                source_flags[cc_hash].add(
-                    "gmail_in" if email.direction == "in" else "gmail_out"
-                )
+                source_flags[cc_hash].add("gmail_in" if email.direction == "in" else "gmail_out")
                 cc_contact.cc_count += 1
 
         # Process meetings
@@ -277,6 +282,9 @@ class ContactAggregationService:
                 email=None,  # TODO: Populate from backfill service contact mapping
                 display_name=None,  # TODO: Populate from backfill service contact mapping
                 email_count_30d=working.email_count,
+                email_count_7d=working.email_count_7d,
+                email_count_8_30d=working.email_count_8_30d,
+                email_count_31_90d=working.email_count_31_90d,
                 inbound_count_30d=working.inbound_count,
                 outbound_count_30d=working.outbound_count,
                 direct_email_count=working.outbound_count,

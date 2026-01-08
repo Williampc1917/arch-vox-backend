@@ -26,6 +26,10 @@ psql $PROD_DB_URL -f migrations/001_create_audit_logs.sql
 - `001_create_audit_logs.sql` - Creates audit_logs table for PII access tracking (Gmail API compliance)
 - `002_create_contact_identities.sql` - Creates contact_identities table for encrypted emails/display names
 - `003_add_contact_domain_shared_inbox.sql` - Adds contacts.email_domain + contacts.is_shared_inbox
+- `004_add_vip_onboarding_state.sql` - Adds VIP onboarding state fields to users
+- `005_enable_audit_log_rls.sql` - Enables RLS policies for append-only audit logs
+- `006_add_contact_quality_fields.sql` - Adds recency bucket counts + manual flag to contacts
+- `007_add_vip_backfill_retry_count.sql` - Adds per-job retry counter to VIP backfill jobs
 
 ## Migration Checklist
 

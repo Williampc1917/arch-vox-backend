@@ -27,7 +27,7 @@ async def test_gmail_list_messages_success(httpx_mock):
         match_querystring=False,
     )
 
-    messages, total = await service.list_messages("token", max_results=1)
+    messages, total, _ = await service.list_messages("token", max_results=1)
     await service.close()
 
     assert total == 1

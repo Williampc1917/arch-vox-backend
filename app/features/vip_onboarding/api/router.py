@@ -54,12 +54,6 @@ async def get_vip_onboarding_status(claims: dict = Depends(auth_dependency)) -> 
             status_code=status.HTTP_409_CONFLICT,
             detail="VIP backfill is currently disabled.",
         )
-    if not settings.VIP_IDENTITY_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Manual contact add is disabled until VIP identity storage is enabled.",
-        )
-
     profile = await get_onboarding_status(user_id)
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -83,7 +77,7 @@ async def get_vip_onboarding_status(claims: dict = Depends(auth_dependency)) -> 
         error_message = latest_job.error_message
 
         # Allow retry if job failed and hasn't exceeded max attempts
-        if latest_job.status == "failed" and latest_job.attempts < MAX_RETRY_ATTEMPTS:
+        if latest_job.status == "failed" and latest_job.retry_count < MAX_RETRY_ATTEMPTS:
             can_retry = True
 
     return {
@@ -94,6 +88,8 @@ async def get_vip_onboarding_status(claims: dict = Depends(auth_dependency)) -> 
         "vip_onboarding_skipped": getattr(profile, "vip_onboarding_skipped", False),
         "vip_acquisition_status": getattr(profile, "vip_acquisition_status", "active"),
         "vip_last_attempt_at": getattr(profile, "vip_last_attempt_at", None),
+        "identity_enabled": settings.VIP_IDENTITY_ENABLED,
+        "manual_add_enabled": settings.VIP_IDENTITY_ENABLED,
     }
 
 
@@ -110,6 +106,16 @@ async def retry_vip_backfill(claims: dict = Depends(auth_dependency)) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token: missing user ID",
+        )
+    if not settings.VIP_BACKFILL_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="VIP backfill is currently disabled.",
+        )
+    if not settings.VIP_IDENTITY_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Manual contact add is disabled until VIP identity storage is enabled.",
         )
 
     # Load the latest job to check if retry is allowed
@@ -132,41 +138,33 @@ async def retry_vip_backfill(claims: dict = Depends(auth_dependency)) -> dict:
             detail=f"Cannot retry job with status '{latest_job.status}'. Only failed jobs can be retried.",
         )
 
-    if latest_job.attempts >= MAX_RETRY_ATTEMPTS:
+    if latest_job.retry_count >= MAX_RETRY_ATTEMPTS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Maximum retry attempts ({MAX_RETRY_ATTEMPTS}) exceeded. Please contact support.",
         )
 
-    # Enqueue a new job with force=True to bypass deduplication
+    # Reset and re-enqueue the failed job
     from app.features.vip_onboarding.services.scheduler import (
         VipSchedulerError,
-        enqueue_vip_backfill_job,
+        enqueue_existing_vip_job,
     )
 
     try:
-        new_job = await enqueue_vip_backfill_job(
-            user_id=user_id, trigger_reason="manual_retry", force=True
-        )
-
-        if not new_job:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to enqueue retry job.",
-            )
+        await VipRepository.reset_job_pending(latest_job.id)
+        await enqueue_existing_vip_job(latest_job, trigger_reason="manual_retry")
 
         logger.info(
             "VIP backfill retry enqueued",
             user_id=user_id,
-            new_job_id=new_job.id,
-            previous_job_id=latest_job.id,
-            previous_attempts=latest_job.attempts,
+            job_id=latest_job.id,
+            retry_count=latest_job.retry_count + 1,
         )
 
         return {
             "message": "VIP backfill retry enqueued successfully.",
-            "job_id": new_job.id,
-            "attempt": new_job.attempts,
+            "job_id": latest_job.id,
+            "retry_count": latest_job.retry_count + 1,
         }
 
     except VipSchedulerError as exc:
@@ -390,12 +388,19 @@ async def add_manual_contact(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token: missing user ID",
         )
+    if not settings.VIP_IDENTITY_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Manual contact add is disabled until VIP identity storage is enabled.",
+        )
 
     email = payload.email.strip().lower()
     display_name = payload.display_name.strip() if payload.display_name else None
     contact_hash = hash_email(email)
 
-    await ContactAggregationRepository.ensure_contact_exists(user_id, contact_hash)
+    await ContactAggregationRepository.ensure_contact_exists(
+        user_id, contact_hash, manual_added=True
+    )
 
     await ContactIdentityRepository.upsert_identities(
         [

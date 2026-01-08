@@ -295,11 +295,23 @@ async def oauth_callback(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Security validation failed. Please try connecting Gmail again.",
             ) from None
-        elif error_code in ["oauth_failed", "access_denied", "missing_gmail_scopes"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Gmail authorization was denied or failed. Please try again and grant the required permissions.",
-            ) from None
+        elif error_code in [
+            "oauth_failed",
+            "access_denied",
+            "missing_gmail_scopes",
+            "missing_calendar_scopes",
+            "missing_required_scopes",
+        ]:
+            return GmailAuthCallbackResponse(
+                success=False,
+                message=(
+                    "Gmail + Calendar access is required. "
+                    "Please allow both permissions to continue."
+                ),
+                gmail_connected=False,
+                next_step="stay_on_gmail",
+                onboarding_completed=False,
+            )
         elif error_code == "token_storage_failed":
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

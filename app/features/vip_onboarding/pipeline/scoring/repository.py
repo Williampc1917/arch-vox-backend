@@ -26,6 +26,59 @@ class VipScoringRepository:
         return await ContactAggregationRepository.fetch_contacts(user_id, limit)
 
     @staticmethod
+    async def fetch_contacts_for_rescore(user_id: str, limit: int) -> list[dict]:
+        return await ContactAggregationRepository.fetch_contacts_for_rescore(user_id, limit)
+
+    @staticmethod
+    async def fetch_manual_contacts(user_id: str) -> list[dict]:
+        query = """
+            SELECT
+                id,
+                contact_hash,
+                email,
+                display_name,
+                first_contact_at,
+                last_contact_at,
+                email_count_30d,
+                email_count_7d,
+                email_count_8_30d,
+                email_count_31_90d,
+                inbound_count_30d,
+                outbound_count_30d,
+                direct_email_count,
+                cc_email_count,
+                thread_count_30d,
+                avg_thread_depth,
+                attachment_email_count,
+                starred_email_count,
+                important_email_count,
+                reply_rate_30d,
+                median_response_hours,
+                off_hours_ratio,
+                threads_they_started,
+                threads_you_started,
+                meeting_count_30d,
+                total_meeting_minutes,
+                recurring_meeting_count,
+                meetings_you_organized,
+                meetings_they_organized,
+                weighted_meeting_score,
+                meeting_recurrence_score,
+                consistency_score,
+                initiation_score,
+                email_domain,
+                is_shared_inbox,
+                manual_added,
+                vip_score,
+                confidence_score
+            FROM contacts
+            WHERE user_id = %s
+              AND manual_added = true
+        """
+
+        return await fetch_all(query, (user_id,))
+
+    @staticmethod
     async def update_contact_scores(user_id: str, contacts: Iterable["ScoredContact"]) -> None:
         """Batch update VIP scores for multiple contacts in a single transaction."""
         contacts_list = list(contacts)

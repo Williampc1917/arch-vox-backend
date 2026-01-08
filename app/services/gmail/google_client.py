@@ -191,6 +191,7 @@ class GoogleGmailService:
         include_spam_trash: bool = False,
         page_token: str | None = None,
         message_format: str = "full",
+        metadata_headers: list[str] | None = None,
     ) -> tuple[list[GmailMessage], int, str | None]:
         """
         List messages from user's Gmail.
@@ -203,6 +204,7 @@ class GoogleGmailService:
             include_spam_trash: Whether to include spam and trash
             page_token: Token for pagination
             message_format: Message format for individual fetch ("full", "metadata", etc.)
+            metadata_headers: Optional header list for metadata fetches
 
         Returns:
             Tuple[list[GmailMessage], int, str | None]: (Messages, Total count, next page token)
@@ -255,7 +257,10 @@ class GoogleGmailService:
             for msg_id in message_ids:
                 try:
                     message = await self.get_message(
-                        access_token, msg_id, format=message_format
+                        access_token,
+                        msg_id,
+                        format=message_format,
+                        metadata_headers=metadata_headers,
                     )
                     messages.append(message)
                 except GoogleGmailError as e:
@@ -274,7 +279,11 @@ class GoogleGmailService:
             raise GoogleGmailError(f"Failed to list messages: {e}") from e
 
     async def get_message(
-        self, access_token: str, message_id: str, format: str = "full"
+        self,
+        access_token: str,
+        message_id: str,
+        format: str = "full",
+        metadata_headers: list[str] | None = None,
     ) -> GmailMessage:
         """
         Get a specific message by ID.
@@ -283,6 +292,7 @@ class GoogleGmailService:
             access_token: Valid OAuth access token
             message_id: Gmail message ID
             format: Message format ("full", "metadata", "minimal", "raw")
+            metadata_headers: Optional header list for metadata fetches
 
         Returns:
             GmailMessage: Gmail message details
@@ -294,6 +304,8 @@ class GoogleGmailService:
             url = f"{GMAIL_API_BASE_URL}/users/{GMAIL_USER_ID}/messages/{message_id}"
             headers = self._get_auth_headers(access_token)
             params = {"format": format}
+            if metadata_headers:
+                params["metadataHeaders"] = metadata_headers
 
             logger.info("Getting Gmail message", message_id=message_id, format=format)
 
@@ -670,9 +682,16 @@ async def list_user_messages(
     max_results: int = 10,
     label_ids: list[str] | None = None,
     query: str | None = None,
+    metadata_headers: list[str] | None = None,
 ) -> tuple[list[GmailMessage], int, str | None]:
     """List messages for user."""
-    return await google_gmail_service.list_messages(access_token, max_results, label_ids, query)
+    return await google_gmail_service.list_messages(
+        access_token,
+        max_results,
+        label_ids,
+        query,
+        metadata_headers=metadata_headers,
+    )
 
 
 async def get_gmail_message(access_token: str, message_id: str) -> GmailMessage:

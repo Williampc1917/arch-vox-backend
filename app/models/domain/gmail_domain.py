@@ -39,9 +39,7 @@ class GmailMessage:
         self.subject = self.headers.get("subject", "(No Subject)")
         self.sender = self._parse_email_address(self.headers.get("from", ""))
         self.recipients = self._parse_email_addresses(self.headers.get("to", ""))
-        self.recipient = (
-            self.recipients[0] if self.recipients else {"name": "", "email": ""}
-        )
+        self.recipient = self.recipients[0] if self.recipients else {"name": "", "email": ""}
         self.cc = self._parse_email_addresses(self.headers.get("cc", ""))
         self.bcc = self._parse_email_addresses(self.headers.get("bcc", ""))
         self.reply_to = self._parse_email_address(self.headers.get("reply-to", ""))
