@@ -54,6 +54,15 @@ async def lifespan(app: FastAPI):
         await db_pool.initialize()
         startup_tasks.append("database_pool")
 
+        if settings.NEO4J_SYNC_ENABLED:
+            logger.info("Initializing Neo4j driver")
+            from app.db.neo4j import neo4j_driver
+
+            await neo4j_driver.initialize()
+            startup_tasks.append("neo4j")
+        else:
+            logger.info("Neo4j sync disabled", env_flag="NEO4J_SYNC_ENABLED")
+
         # Initialize Redis second
         logger.info("Initializing Redis connection")
         try:
@@ -152,6 +161,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Error closing HTTP clients", error=str(e))
         shutdown_errors.append(f"HTTP clients: {e}")
+
+    # Close Neo4j driver
+    try:
+        logger.info("Closing Neo4j driver")
+        from app.db.neo4j import neo4j_driver
+
+        await neo4j_driver.close()
+    except Exception as e:
+        logger.error("Error closing Neo4j driver", error=str(e))
+        shutdown_errors.append(f"Neo4j: {e}")
 
     # Close database pool last (may have active connections)
     try:

@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     UPSTASH_REDIS_REST_URL: str
     UPSTASH_REDIS_REST_TOKEN: str
 
+    # Neo4j Aura settings
+    NEO4J_URI: str | None = None
+    NEO4J_USERNAME: str = "neo4j"
+    NEO4J_PASSWORD: str | None = None
+    NEO4J_DATABASE: str = "neo4j"
+    NEO4J_SYNC_ENABLED: bool = False
+    NEO4J_MAX_CONNECTION_POOL_SIZE: int = 50
+    NEO4J_CONNECTION_TIMEOUT: float = 30.0
+
     # VAPI settings
     VAPI_PRIVATE_KEY: str | None = None
 

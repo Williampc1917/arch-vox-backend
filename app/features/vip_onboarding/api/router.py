@@ -5,6 +5,8 @@ Expose endpoints for checking VIP backfill/aggregation status and
 retrieving candidate VIPs for the onboarding flow.
 """
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
 
@@ -28,6 +30,7 @@ from app.utils.audit_helpers import audit_data_modification, audit_pii_access
 
 router = APIRouter(prefix="/onboarding/vips", tags=["onboarding-vips"])
 logger = get_logger(__name__)
+NEO4J_SYNC_TIMEOUT_SECONDS = 3.0
 
 
 class VipSelectionRequest(BaseModel):
@@ -37,6 +40,39 @@ class VipSelectionRequest(BaseModel):
 class VipManualContactRequest(BaseModel):
     email: EmailStr
     display_name: str | None = Field(default=None, max_length=120)
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    """Prevent unhandled task exceptions when sync runs in background."""
+    try:
+        task.result()
+    except Exception:
+        # Sync service logs failures and updates sync state.
+        pass
+
+
+async def _trigger_neo4j_sync(user_id: str) -> None:
+    if not settings.NEO4J_SYNC_ENABLED:
+        return
+
+    from app.features.vip_onboarding.services.neo4j_sync_service import Neo4jSyncService
+
+    task = asyncio.create_task(Neo4jSyncService.sync_vips_to_neo4j(user_id))
+    task.add_done_callback(_consume_task_result)
+
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=NEO4J_SYNC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.info(
+            "Neo4j sync running in background",
+            user_id=user_id,
+            timeout_s=NEO4J_SYNC_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("Neo4j sync failed quickly", user_id=user_id, error=str(exc))
 
 
 @router.get("/status")
@@ -287,6 +323,9 @@ async def save_vip_selection(
         changes={"vip_count": len(vip_request.contacts), "selected_at": "now"},
     )
 
+    # Attempt Neo4j sync (short timeout, then continue in background)
+    await _trigger_neo4j_sync(user_id)
+
     # Complete onboarding after VIP selection is saved
     from app.services.core.onboarding_service import OnboardingServiceError, complete_onboarding
 
@@ -361,6 +400,19 @@ async def skip_vip_onboarding(
         resource_type="vip_onboarding",
         changes={"skipped_at": "now"},
     )
+
+    from app.features.vip_onboarding.repository.neo4j_sync_state_repository import (
+        Neo4jSyncStateRepository,
+    )
+
+    try:
+        await Neo4jSyncStateRepository.mark_synced(user_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to initialize Neo4j sync state for skipped onboarding",
+            user_id=user_id,
+            error=str(exc),
+        )
 
     return None
 

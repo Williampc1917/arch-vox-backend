@@ -7,6 +7,8 @@ import time
 
 from fastapi import APIRouter
 
+from app.config import settings
+from app.db.neo4j import neo4j_health_check
 from app.db.pool import db_health_check
 from app.services.infrastructure.redis_client import fast_redis
 
@@ -90,8 +92,35 @@ async def readyz():
         }
         overall_ok = False
 
-    # 3) Configuration checks
-    from app.config import settings
+    # 3) Neo4j health check
+    t0 = time.time()
+    if settings.NEO4J_SYNC_ENABLED:
+        try:
+            neo4j_status = await neo4j_health_check()
+            is_healthy = neo4j_status.get("healthy", False)
+            checks["neo4j"] = {
+                "ok": is_healthy,
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+                "database": settings.NEO4J_DATABASE,
+            }
+
+            if not is_healthy:
+                checks["neo4j"]["error"] = neo4j_status.get("error", "Neo4j unhealthy")
+                if "error_type" in neo4j_status:
+                    checks["neo4j"]["error_type"] = neo4j_status["error_type"]
+
+            overall_ok = overall_ok and is_healthy
+        except Exception as e:
+            checks["neo4j"] = {
+                "ok": False,
+                "error": f"{type(e).__name__}: {e}",
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+            }
+            overall_ok = False
+    else:
+        checks["neo4j"] = {"ok": True, "status": "disabled"}
+
+    # 4) Configuration checks
 
     config_ok = True
     config_issues = []
@@ -103,6 +132,14 @@ async def readyz():
     if not settings.UPSTASH_REDIS_REST_URL:
         config_issues.append("UPSTASH_REDIS_REST_URL not set")
         config_ok = False
+
+    if settings.NEO4J_SYNC_ENABLED:
+        if not settings.NEO4J_URI:
+            config_issues.append("NEO4J_URI not set")
+            config_ok = False
+        if not settings.NEO4J_PASSWORD:
+            config_issues.append("NEO4J_PASSWORD not set")
+            config_ok = False
 
     checks["configuration"] = {
         "ok": config_ok,

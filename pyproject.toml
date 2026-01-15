@@ -18,6 +18,7 @@ dependencies = [
     # Database & Cache
     "psycopg[binary,pool]>=3.1.0",  # Supabase/Postgres with connection pooling
     "redis>=5.0.4",
+    "neo4j>=5.0.0",
     
     # HTTP & Auth
     "httpx>=0.25.0",
